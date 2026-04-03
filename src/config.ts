@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import { DataSource } from './types';
 
-// DATA_SOURCES supports comma-separated list: aprsfi,aprsis,simulator
+// DATA_SOURCES supports comma-separated list: aprsfi,aprsis
 // Falls back to legacy DATA_SOURCE for backwards compatibility
-const rawSources = process.env.DATA_SOURCES ?? process.env.DATA_SOURCE ?? 'simulator';
+const rawSources = process.env.DATA_SOURCES ?? process.env.DATA_SOURCE ?? 'aprsis';
 const activeSources = rawSources.split(',').map(s => s.trim()).filter(Boolean) as DataSource[];
 
 export const config = {
@@ -27,10 +27,6 @@ export const config = {
     port:     parseInt(process.env.APRSIS_PORT ?? '14580', 10),
     callsign: process.env.APRSIS_CALLSIGN ?? 'N0CALL',
     filter:   process.env.APRSIS_FILTER ?? 'p/E7',
-  },
-
-  simulator: {
-    interval: parseInt(process.env.SIMULATOR_INTERVAL ?? '5000', 10),
   },
 } as const;
 

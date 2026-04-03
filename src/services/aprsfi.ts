@@ -68,18 +68,23 @@ async function fetchAprsfi(callsigns: string[]): Promise<Position[]> {
     throw new Error(`APRS.fi API error: ${JSON.stringify(data)}`);
   }
 
-  return (data.entries ?? []).map(entry => ({
-    radioId: entry.name,
-    callsign: entry.name,
-    lat: parseFloat(entry.lat),
-    lon: parseFloat(entry.lng),
-    altitude: entry.altitude ? parseFloat(entry.altitude) : undefined,
-    speed:    entry.speed    ? parseFloat(entry.speed)    : undefined,
-    course:   entry.course   ? parseFloat(entry.course)   : undefined,
-    comment:  entry.comment,
-    timestamp: new Date(parseInt(entry.lasttime, 10) * 1000).toISOString(),
-    source: 'aprsfi' as const,
-  }));
+  return (data.entries ?? []).map(entry => {
+    console.log('[aprsfi] symbol raw:', entry.name, JSON.stringify(entry.symbol));
+    return ({
+    radioId:   entry.name,
+    callsign:  entry.name,
+    lat:       parseFloat(entry.lat),
+    lon:       parseFloat(entry.lng),
+    altitude:  entry.altitude ? parseFloat(entry.altitude) : undefined,
+    speed:     entry.speed    ? parseFloat(entry.speed)    : undefined,
+    course:    entry.course   ? parseFloat(entry.course)   : undefined,
+    comment:     entry.comment,
+    symbol:      entry.symbol?.length === 2 ? entry.symbol[1] : entry.symbol,
+    symbolTable: entry.symbol?.length === 2 ? entry.symbol[0] : '/',
+    timestamp:   new Date(parseInt(entry.lasttime, 10) * 1000).toISOString(),
+    source:    'aprsfi' as const,
+  });
+  });
 }
 
 export function startAprsfiPoller(onPosition: (pos: Position) => void): () => void {
