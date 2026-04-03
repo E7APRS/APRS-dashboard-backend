@@ -7,8 +7,10 @@ export interface Position {
   speed?: number;
   course?: number;
   comment?: string;
+  symbol?: string;       // APRS symbol code e.g. '-', '#', '['
+  symbolTable?: string;  // '/' = primary table, '\' = alternate table
   timestamp: string;
-  source: 'simulator' | 'aprsfi' | 'aprsis' | 'dmr';
+  source: 'aprsfi' | 'aprsis' | 'simulator' | 'fixed' | 'dmr';
 }
 
 export interface Device {
@@ -18,4 +20,4 @@ export interface Device {
   lastPosition: Position;
 }
 
-export type DataSource = 'aprsfi' | 'aprsis' | 'simulator';
+export type DataSource = 'aprsfi' | 'aprsis' | 'simulator' | 'fixed' | 'dmr';

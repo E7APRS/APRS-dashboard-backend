@@ -26,10 +26,6 @@ router.get('/status', (_req: Request, res: Response) => {
       enabled: config.dataSources.includes('aprsis'),
       filter:  config.aprsis.filter,
     },
-    simulator: {
-      enabled:  config.dataSources.includes('simulator'),
-      interval: config.simulator.interval,
-    },
   });
 });
 
