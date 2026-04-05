@@ -1,7 +1,7 @@
 import { Server as HttpServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { Position } from '../types';
-import { getLatestPositions } from '../services/store';
+import { getLatestPositions, getAllDevices, getHistory } from '../services/store';
 
 let io: SocketServer | null = null;
 
@@ -15,6 +15,14 @@ export function initSocket(server: HttpServer): SocketServer {
 
     // Send current state to new client immediately
     socket.emit('positions:snapshot', getLatestPositions());
+
+    // Send trail history for all known devices
+    const historySnap: Record<string, Position[]> = {};
+    for (const device of getAllDevices()) {
+      const trail = getHistory(device.radioId);
+      if (trail.length > 0) historySnap[device.radioId] = trail;
+    }
+    socket.emit('history:snapshot', historySnap);
 
     socket.on('disconnect', () => {
       console.log('[socket] Client disconnected:', socket.id);

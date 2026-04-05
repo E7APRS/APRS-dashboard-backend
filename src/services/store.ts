@@ -31,6 +31,7 @@ export async function addPosition(pos: Position): Promise<void> {
   });
 
   // 2. Persist to Supabase (non-blocking — log errors, don't throw)
+
   const sb = getSupabase();
 
   // Device must exist before position (foreign key) — sequential
@@ -48,16 +49,18 @@ export async function addPosition(pos: Position): Promise<void> {
   }
 
   const { error: posErr } = await sb.from('positions').insert({
-    radio_id:  pos.radioId,
-    callsign:  pos.callsign,
-    lat:       pos.lat,
-    lon:       pos.lon,
-    altitude:  pos.altitude ?? null,
-    speed:     pos.speed    ?? null,
-    course:    pos.course   ?? null,
-    comment:   pos.comment  ?? null,
-    source:    pos.source,
-    timestamp: pos.timestamp,
+    radio_id:     pos.radioId,
+    callsign:     pos.callsign,
+    lat:          pos.lat,
+    lon:          pos.lon,
+    altitude:     pos.altitude     ?? null,
+    speed:        pos.speed        ?? null,
+    course:       pos.course       ?? null,
+    comment:      pos.comment      ?? null,
+    symbol:       pos.symbol       ?? null,
+    symbol_table: pos.symbolTable  ?? null,
+    source:       pos.source,
+    timestamp:    pos.timestamp,
   });
 
   if (posErr) console.error('[store] position insert error:', posErr.message);
@@ -97,16 +100,18 @@ export async function getHistoryFromDb(radioId: string, limit = 500): Promise<Po
   }
 
   return (data ?? []).map(row => ({
-    radioId:   row.radio_id,
-    callsign:  row.callsign,
-    lat:       row.lat,
-    lon:       row.lon,
-    altitude:  row.altitude ?? undefined,
-    speed:     row.speed    ?? undefined,
-    course:    row.course   ?? undefined,
-    comment:   row.comment  ?? undefined,
-    timestamp: row.timestamp,
-    source:    row.source as Position['source'],
+    radioId:     row.radio_id,
+    callsign:    row.callsign,
+    lat:         row.lat,
+    lon:         row.lon,
+    altitude:    row.altitude     ?? undefined,
+    speed:       row.speed        ?? undefined,
+    course:      row.course       ?? undefined,
+    comment:     row.comment      ?? undefined,
+    symbol:      row.symbol       ?? undefined,
+    symbolTable: row.symbol_table ?? undefined,
+    timestamp:   row.timestamp,
+    source:      row.source as Position['source'],
   })).reverse();
 }
 
@@ -126,12 +131,12 @@ export async function warmCache(): Promise<void> {
 
   for (const row of devices ?? []) {
     const lastPosition: Position = {
-      radioId:  row.radio_id,
-      callsign: row.callsign,
-      lat:      row.last_lat,
-      lon:      row.last_lon,
+      radioId:   row.radio_id,
+      callsign:  row.callsign,
+      lat:       row.last_lat,
+      lon:       row.last_lon,
       timestamp: row.last_seen,
-      source:   'aprsfi', // best-effort; source not stored on device row
+      source:    row.source ?? 'aprsfi',
     };
 
     deviceCache.set(row.radio_id, {
@@ -142,5 +147,41 @@ export async function warmCache(): Promise<void> {
     });
   }
 
-  console.log(`[store] Cache warmed — ${deviceCache.size} device(s) loaded from Supabase`);
+  // Populate positionCache with recent history from Supabase
+  if (deviceCache.size > 0) {
+    const { data: positions, error: posErr } = await sb
+      .from('positions')
+      .select('*')
+      .in('radio_id', Array.from(deviceCache.keys()))
+      .order('timestamp', { ascending: true })
+      .limit(deviceCache.size * HISTORY_LIMIT);
+
+    if (posErr) {
+      console.warn('[store] warmCache positions error:', posErr.message);
+    } else {
+      for (const row of positions ?? []) {
+        const history = positionCache.get(row.radio_id) ?? [];
+        history.push({
+          radioId:     row.radio_id,
+          callsign:    row.callsign,
+          lat:         row.lat,
+          lon:         row.lon,
+          altitude:    row.altitude     ?? undefined,
+          speed:       row.speed        ?? undefined,
+          course:      row.course       ?? undefined,
+          comment:     row.comment      ?? undefined,
+          symbol:      row.symbol       ?? undefined,
+          symbolTable: row.symbol_table ?? undefined,
+          timestamp:   row.timestamp,
+          source:      (row.source ?? 'aprsfi') as Position['source'],
+        });
+        if (history.length > HISTORY_LIMIT) history.shift();
+        positionCache.set(row.radio_id, history);
+      }
+    }
+  }
+
+  console.log(`[store] Cache warmed — ${deviceCache.size} device(s), ${
+    Array.from(positionCache.values()).reduce((s, h) => s + h.length, 0)
+  } position(s) loaded from Supabase`);
 }
