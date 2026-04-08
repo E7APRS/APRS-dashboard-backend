@@ -9,6 +9,12 @@ const activeSources = rawSources.split(',').map(s => s.trim()).filter(Boolean) a
 export const config = {
   port: parseInt(process.env.PORT ?? '3001', 10),
 
+  // Comma-separated allowed origins for CORS. Use '*' only in development.
+  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3000').split(',').map(s => s.trim()),
+
+  // Shared secret required on POST /api/gps (X-Api-Key header)
+  gpsApiKey: process.env.GPS_API_KEY ?? '',
+
   dataSources: activeSources,
 
   supabase: {

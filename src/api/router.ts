@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import {
   getAllDevices,
   getDevice,
@@ -7,6 +7,18 @@ import {
   addPosition,
 } from '../services/store';
 import { config } from '../config';
+
+// Middleware: require X-Api-Key header matching GPS_API_KEY env var.
+// Skipped if GPS_API_KEY is not configured (development convenience).
+function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+  if (!config.gpsApiKey) { next(); return; }
+  const key = req.headers['x-api-key'];
+  if (key !== config.gpsApiKey) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+}
 import { Position } from '../types';
 import { broadcastPosition } from '../socket/index';
 
@@ -51,13 +63,14 @@ router.get('/positions/latest', (_req: Request, res: Response) => {
 
 // Full position history from Supabase
 router.get('/positions/:radioId/history', async (req: Request, res: Response) => {
-  const limit = Math.min(parseInt(req.query.limit as string ?? '500', 10), 2000);
+  const parsed = parseInt(req.query.limit as string ?? '500', 10);
+  const limit  = Math.min(Math.max(1, isNaN(parsed) ? 500 : parsed), 2000);
   const history = await getHistoryFromDb(req.params.radioId, limit);
   res.json(history);
 });
 
-// Manual GPS push (for future DMR integration)
-router.post('/gps', async (req: Request, res: Response) => {
+// Manual GPS push (DMR bridge, etc.) — requires X-Api-Key if GPS_API_KEY is set
+router.post('/gps', requireApiKey, async (req: Request, res: Response) => {
   const body = req.body as Partial<Position>;
 
   if (!body.radioId || !body.callsign || body.lat === undefined || body.lon === undefined) {

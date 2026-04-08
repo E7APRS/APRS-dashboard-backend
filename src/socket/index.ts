@@ -1,13 +1,14 @@
 import { Server as HttpServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { Position } from '../types';
+import { config } from '../config';
 import { getLatestPositions, getAllDevices, getHistory } from '../services/store';
 
 let io: SocketServer | null = null;
 
 export function initSocket(server: HttpServer): SocketServer {
   io = new SocketServer(server, {
-    cors: { origin: '*' },
+    cors: { origin: config.corsOrigins },
   });
 
   io.on('connection', socket => {

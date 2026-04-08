@@ -12,7 +12,7 @@ import { startAprsis } from './services/aprsis';
 import { startFixedStations } from './services/fixed-stations';
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: config.corsOrigins }));
 app.use(express.json());
 app.use('/api', apiRouter);
 

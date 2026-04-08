@@ -9,6 +9,7 @@ import { Position, Device } from '../types';
 import { getSupabase } from './supabase';
 
 const HISTORY_LIMIT = 100;
+const MAX_DEVICES   = 5000; // guard against unbounded cache growth
 
 // In-memory cache
 const positionCache  = new Map<string, Position[]>();
@@ -22,6 +23,12 @@ export async function addPosition(pos: Position): Promise<void> {
   history.push(pos);
   if (history.length > HISTORY_LIMIT) history.shift();
   positionCache.set(pos.radioId, history);
+
+  // Evict oldest device if cache is full (prevents unbounded growth)
+  if (deviceCache.size >= MAX_DEVICES && !deviceCache.has(pos.radioId)) {
+    const oldest = deviceCache.keys().next().value;
+    if (oldest) { deviceCache.delete(oldest); positionCache.delete(oldest); }
+  }
 
   deviceCache.set(pos.radioId, {
     radioId:      pos.radioId,
