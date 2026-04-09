@@ -5,6 +5,7 @@ import cors from 'cors';
 import { config, isEnabled } from './config';
 import { Position } from './types';
 import apiRouter from './api/router';
+import { requireAuth } from './middleware/requireAuth';
 import { initSocket, broadcastPosition } from './socket/index';
 import { addPosition, warmCache } from './services/store';
 import { startAprsfiPoller } from './services/aprsfi';
@@ -14,6 +15,11 @@ import { startFixedStations } from './services/fixed-stations';
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
 app.use(express.json());
+// POST /api/gps uses its own API key auth (for DSD+ forwarder); all other /api routes require JWT
+app.use('/api', (req, res, next) => {
+  if (req.method === 'POST' && req.path === '/gps') return next();
+  return requireAuth(req, res, next);
+});
 app.use('/api', apiRouter);
 
 app.get('/', (_req, res) => {

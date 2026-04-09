@@ -3,12 +3,21 @@ import { Server as SocketServer } from 'socket.io';
 import { Position } from '../types';
 import { config } from '../config';
 import { getLatestPositions, getAllDevices, getHistory } from '../services/store';
+import { getSupabase } from '../services/supabase';
 
 let io: SocketServer | null = null;
 
 export function initSocket(server: HttpServer): SocketServer {
   io = new SocketServer(server, {
     cors: { origin: config.corsOrigins },
+  });
+
+  io.use(async (socket, next) => {
+    const token = socket.handshake.auth?.token as string | undefined;
+    if (!token) { next(new Error('Unauthorized')); return; }
+    const { data: { user }, error } = await getSupabase().auth.getUser(token);
+    if (error || !user) { next(new Error('Unauthorized')); return; }
+    next();
   });
 
   io.on('connection', socket => {
