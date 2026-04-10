@@ -17,11 +17,56 @@ const deviceCache    = new Map<string, Device>();
 
 // ─── Write ────────────────────────────────────────────────────────────────────
 
-export async function addPosition(pos: Position): Promise<void> {
-  // 1. Update in-memory cache immediately (fast path for broadcast)
+/**
+ * Dedup + priority rules:
+ *   - Skip if new timestamp is older than the latest stored position.
+ *   - Skip if timestamps are equal and new source is not 'aprsis' (APRS-IS has priority).
+ *   - Overwrite (replace history entry + DB row) if timestamps are equal and new source IS 'aprsis'.
+ *   - Normal insert when new timestamp is strictly newer.
+ *
+ * Returns true if the position was accepted and stored, false if it was dropped.
+ */
+export async function addPosition(pos: Position): Promise<boolean> {
+  const existing = deviceCache.get(pos.radioId);
+  const existingLatest = existing?.lastPosition;
+
+  let isOverwrite = false;
+
+  if (existingLatest) {
+    const existingTime = new Date(existingLatest.timestamp).getTime();
+    const newTime      = new Date(pos.timestamp).getTime();
+
+    if (newTime < existingTime) {
+      // Older than latest — drop
+      return false;
+    }
+
+    if (newTime === existingTime) {
+      if (pos.source !== 'aprsis') {
+        // Same timestamp, lower-priority source — drop
+        return false;
+      }
+      // Same timestamp, aprsis wins — overwrite existing record
+      isOverwrite = true;
+    }
+  }
+
+  // 1. Update in-memory cache
   const history = positionCache.get(pos.radioId) ?? [];
-  history.push(pos);
-  if (history.length > HISTORY_LIMIT) history.shift();
+
+  if (isOverwrite) {
+    // Replace the last entry that shares this timestamp instead of appending
+    const idx = history.findLastIndex(p => p.timestamp === pos.timestamp);
+    if (idx !== -1) {
+      history[idx] = pos;
+    } else {
+      history.push(pos);
+    }
+  } else {
+    history.push(pos);
+    if (history.length > HISTORY_LIMIT) history.shift();
+  }
+
   positionCache.set(pos.radioId, history);
 
   // Evict oldest device if cache is full (prevents unbounded growth)
@@ -52,7 +97,17 @@ export async function addPosition(pos: Position): Promise<void> {
 
   if (devErr) {
     console.error('[store] device upsert error:', devErr.message);
-    return;
+    return false;
+  }
+
+  // When overwriting with aprsis, remove the existing same-timestamp row first
+  if (isOverwrite) {
+    const { error: delErr } = await sb
+      .from('positions')
+      .delete()
+      .eq('radio_id', pos.radioId)
+      .eq('timestamp', pos.timestamp);
+    if (delErr) console.error('[store] position dedup-delete error:', delErr.message);
   }
 
   const { error: posErr } = await sb.from('positions').insert({
@@ -71,6 +126,8 @@ export async function addPosition(pos: Position): Promise<void> {
   });
 
   if (posErr) console.error('[store] position insert error:', posErr.message);
+
+  return true;
 }
 
 // ─── Read (in-memory) ─────────────────────────────────────────────────────────
@@ -184,6 +241,18 @@ export async function warmCache(): Promise<void> {
         });
         if (history.length > HISTORY_LIMIT) history.shift();
         positionCache.set(row.radio_id, history);
+      }
+
+      // Back-fill deviceCache.lastPosition with the most recent position from
+      // positionCache, which includes symbol/symbolTable. The devices table
+      // doesn't store those fields, so without this the initial snapshot sent
+      // to connecting clients has no symbol info — aprsfi markers show as plain
+      // circles until the next poll.
+      for (const [radioId, history] of positionCache.entries()) {
+        const latest = history.at(-1);
+        if (!latest) continue;
+        const device = deviceCache.get(radioId);
+        if (device) device.lastPosition = latest;
       }
     }
   }

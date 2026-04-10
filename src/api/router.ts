@@ -4,9 +4,10 @@ import {
   getDevice,
   getLatestPositions,
   getHistoryFromDb,
-  addPosition,
 } from '../services/store';
 import { config } from '../config';
+import { Position } from '../types';
+import { forwardToAprsis } from '../services/aprs-forwarder';
 
 // Middleware: require X-Api-Key header matching GPS_API_KEY env var.
 // Skipped if GPS_API_KEY is not configured (development convenience).
@@ -19,8 +20,6 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
   }
   next();
 }
-import { Position } from '../types';
-import { broadcastPosition } from '../socket/index';
 
 const router = Router();
 
@@ -69,8 +68,10 @@ router.get('/positions/:radioId/history', async (req: Request, res: Response) =>
   res.json(history);
 });
 
-// Manual GPS push (DMR bridge, etc.) — requires X-Api-Key if GPS_API_KEY is set
-router.post('/gps', requireApiKey, async (req: Request, res: Response) => {
+// Manual GPS push (DMR bridge / DSD+) — requires X-Api-Key if GPS_API_KEY is set.
+// Position is NOT stored directly: it is forwarded to APRS-IS and will arrive
+// back through the aprsis.ts listener, which is the canonical store path.
+router.post('/gps', requireApiKey, (req: Request, res: Response) => {
   const body = req.body as Partial<Position>;
 
   if (!body.radioId || !body.callsign || body.lat === undefined || body.lon === undefined) {
@@ -79,22 +80,24 @@ router.post('/gps', requireApiKey, async (req: Request, res: Response) => {
   }
 
   const position: Position = {
-    radioId:   body.radioId,
-    callsign:  body.callsign,
-    lat:       body.lat,
-    lon:       body.lon,
-    altitude:  body.altitude,
-    speed:     body.speed,
-    course:    body.course,
-    comment:   body.comment,
-    timestamp: body.timestamp ?? new Date().toISOString(),
-    source:    'dmr',
+    radioId:     body.radioId,
+    callsign:    body.callsign,
+    lat:         body.lat,
+    lon:         body.lon,
+    altitude:    body.altitude,
+    speed:       body.speed,
+    course:      body.course,
+    comment:     config.dmrComment || body.comment,
+    symbol:      body.symbol,
+    symbolTable: body.symbolTable,
+    timestamp:   body.timestamp ?? new Date().toISOString(),
+    source:      'dmr',
   };
 
-  await addPosition(position);
-  broadcastPosition(position);
+  forwardToAprsis(position);
 
-  res.status(201).json(position);
+  // 202 Accepted — position is in-flight to APRS-IS, not yet in the store
+  res.status(202).json({ status: 'forwarded', callsign: position.callsign });
 });
 
 export default router;

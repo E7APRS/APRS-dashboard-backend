@@ -34,6 +34,10 @@ export const config = {
     callsign: process.env.APRSIS_CALLSIGN ?? 'N0CALL',
     filter:   process.env.APRSIS_FILTER ?? 'p/E7',
   },
+
+  // Comment injected into every DMR position (POST /api/gps).
+  // Leave empty to use whatever comment the client sends.
+  dmrComment: process.env.DMR_COMMENT ?? '',
 } as const;
 
 export const isEnabled = (source: DataSource): boolean =>
