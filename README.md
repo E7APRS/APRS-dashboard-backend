@@ -127,8 +127,45 @@ CREATE TABLE positions (
   created_at   TIMESTAMPTZ DEFAULT now()
 );
 ```
+## Position History Trimming Trigger
+```sql
+CREATE OR REPLACE FUNCTION trim_position_history()
+RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM positions
+  WHERE radio_id = NEW.radio_id
+    AND id NOT IN (
+      SELECT id FROM positions
+      WHERE radio_id = NEW.radio_id
+      ORDER BY timestamp DESC
+      LIMIT 10
+    );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-Supabase trigger `trg_trim_position_history` keeps only the last 10 positions per `radio_id`.
+CREATE TRIGGER trg_trim_position_history
+AFTER INSERT ON positions
+FOR EACH ROW EXECUTE FUNCTION trim_position_history();
+```
+
+Trigger `trg_trim_position_history` keeps only the last 10 positions per `radio_id`.
+
+## Data Sources
+
+### APRS-IS (`aprsis`)
+Direct TCP connection to the APRS-IS Tier 2 network. Receives real-time position packets matching the configured server-side filter. Parses both uncompressed and compressed APRS position formats.
+
+### APRS.fi (`aprsfi`)
+Polls the APRS.fi HTTP API at a configurable interval for a fixed list of callsigns. Requires an API key (free registration at aprs.fi). ToS-compliant: correct `User-Agent`, exponential backoff on failure.
+
+### DMR (`dmr`)
+Positions arrive via `POST /api/gps` pushed by the **DMR-parser** bridge service (`DMR-parser/` in the repo root). The bridge reads DSD+ output (which decodes DMR digital audio from an HD1 radio connected via audio cable), extracts DMR-ID + GPS coordinates, resolves the callsign via RadioID.net, and posts only when GPS data is present. The `source` field on these positions is `"dmr"`.
+
+### Fixed Stations
+Statically defined in `src/services/fixed-stations.ts`. Always active regardless of `DATA_SOURCES`. Rebroadcast every 30 seconds. Used for known fixed infrastructure (repeaters, club stations).
+
+---
 
 ## APRS Packet Parsing
 

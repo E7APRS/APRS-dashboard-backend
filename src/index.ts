@@ -41,8 +41,8 @@ const server = http.createServer(app);
 initSocket(server);
 
 async function handlePosition(pos: Position): Promise<void> {
-  await addPosition(pos);
-  broadcastPosition(pos);
+  const accepted = await addPosition(pos);
+  if (accepted) broadcastPosition(pos);
 }
 
 async function boot(): Promise<void> {
