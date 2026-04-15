@@ -1,5 +1,6 @@
 node_modules/
 dist/
+data/
 .env
 .idea/
 src/scripts/.mock-inject-state.json

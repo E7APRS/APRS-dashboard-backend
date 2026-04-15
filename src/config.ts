@@ -17,6 +17,12 @@ export const config = {
 
   dataSources: activeSources,
 
+  // Local SQLite (primary database)
+  sqlite: {
+    path: process.env.SQLITE_PATH ?? './data/aprs.db',
+  },
+
+  // Supabase (backup database + auth provider)
   supabase: {
     url:            process.env.SUPABASE_URL ?? '',
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
@@ -38,6 +44,10 @@ export const config = {
   // Comment injected into every DMR position (POST /api/gps).
   // Leave empty to use whatever comment the client sends.
   dmrComment: process.env.DMR_COMMENT ?? '',
+
+  // Relay webhook: when set, backend POSTs each new position here (fire-and-forget).
+  // Used by aprs-relay sender running on the same machine.
+  relayWebhookUrl: process.env.RELAY_WEBHOOK_URL ?? '',
 } as const;
 
 export const isEnabled = (source: DataSource): boolean =>

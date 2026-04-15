@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import {
+  addPosition,
   getAllDevices,
   getDevice,
   getLatestPositions,
@@ -8,6 +9,7 @@ import {
 import { config } from '../config';
 import { Position } from '../types';
 import { forwardToAprsis } from '../services/aprs-forwarder';
+import { broadcastPosition } from '../socket/index';
 
 // Middleware: require X-Api-Key header matching GPS_API_KEY env var.
 // Skipped if GPS_API_KEY is not configured (development convenience).
@@ -98,6 +100,42 @@ router.post('/gps', requireApiKey, (req: Request, res: Response) => {
 
   // 202 Accepted — position is in-flight to APRS-IS, not yet in the store
   res.status(202).json({ status: 'forwarded', callsign: position.callsign });
+});
+
+// Relay ingest — accepts batched positions from aprs-relay receiver.
+// Writes directly to store + broadcasts via Socket.io (no APRS-IS forward).
+router.post('/relay', requireApiKey, async (req: Request, res: Response) => {
+  const positions = Array.isArray(req.body) ? req.body : [req.body];
+  let accepted = 0;
+
+  for (const body of positions) {
+    if (!body.radioId || !body.callsign || body.lat === undefined || body.lon === undefined) {
+      continue;
+    }
+
+    const pos: Position = {
+      radioId:     body.radioId,
+      callsign:    body.callsign,
+      lat:         body.lat,
+      lon:         body.lon,
+      altitude:    body.altitude,
+      speed:       body.speed,
+      course:      body.course,
+      comment:     body.comment,
+      symbol:      body.symbol,
+      symbolTable: body.symbolTable,
+      timestamp:   body.timestamp ?? new Date().toISOString(),
+      source:      body.source ?? 'relay',
+    };
+
+    const stored = await addPosition(pos);
+    if (stored) {
+      broadcastPosition(pos);
+      accepted++;
+    }
+  }
+
+  res.json({ status: 'ok', accepted, total: positions.length });
 });
 
 export default router;

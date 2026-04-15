@@ -1,26 +1,32 @@
 import 'dotenv/config';
 import http from 'http';
+import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import { config, isEnabled } from './config';
 import { Position } from './types';
 import apiRouter from './api/router';
+import authRouter from './api/auth-router';
 import { requireAuth } from './middleware/requireAuth';
 import { initSocket, broadcastPosition } from './socket/index';
 import { addPosition, getAllDevices, warmCache } from './services/store';
+import { initDatabase } from './services/database';
 import { startAprsfiPoller } from './services/aprsfi';
 import { startAprsis } from './services/aprsis';
 import { startFixedStations } from './services/fixed-stations';
 
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
+// Serve avatar images
+app.use('/avatars', express.static(path.resolve('data', 'avatars')));
 // POST /api/gps uses its own API key auth (for DSD+ forwarder); all other /api routes require JWT
 app.use('/api', (req, res, next) => {
-  if (req.method === 'POST' && req.path === '/gps') return next();
+  if (req.method === 'POST' && (req.path === '/gps' || req.path === '/relay')) return next();
   return requireAuth(req, res, next);
 });
 app.use('/api', apiRouter);
+app.use('/api/auth', authRouter);
 
 function escapeHtml(value: string): string {
   return value
@@ -104,10 +110,25 @@ initSocket(server);
 
 async function handlePosition(pos: Position): Promise<void> {
   const accepted = await addPosition(pos);
-  if (accepted) broadcastPosition(pos);
+  if (accepted) {
+    broadcastPosition(pos);
+
+    // Notify aprs-relay sender if configured (fire-and-forget, non-blocking)
+    if (config.relayWebhookUrl) {
+      fetch(config.relayWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pos),
+        signal: AbortSignal.timeout(2000),
+      }).catch(() => {});
+    }
+  }
 }
 
 async function boot(): Promise<void> {
+  // Initialize local PostgreSQL schema
+  await initDatabase();
+
   await warmCache();
 
   console.log('[boot] Active sources:', config.dataSources.join(', '));
