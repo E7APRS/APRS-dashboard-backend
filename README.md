@@ -50,7 +50,7 @@ Server starts on `http://localhost:3001`.
 | `APRSIS_CALLSIGN` | — | Your amateur radio callsign (required for login) |
 | `APRSIS_FILTER` | `p/E7` | Server-side filter ([syntax](http://www.aprs-is.net/javAPRSFilter.aspx)) |
 | `APRSIS_DEBUG` | — | Set to `1` to log all raw incoming packets |
-| `RELAY_WEBHOOK_URL` | — | URL to POST new positions to (e.g. `http://localhost:3002/hook/position` for aprs-relay sender) |
+| `RELAY_WEBHOOK_URL` | — | URL to POST new positions to (e.g. `http://localhost:3002/hook/position` for lora-relay sender) |
 
 ### APRS-IS filter examples
 
@@ -92,7 +92,7 @@ APRSIS_FILTER=r/43.85/18.41/100  # 100km radius around Sarajevo
 
 ### POST /api/relay payload
 
-Accepts a single position or an array of positions. Writes directly to the in-memory store and broadcasts via WebSocket — does **not** forward to APRS-IS. Used by the `aprs-relay` receiver.
+Accepts a single position or an array of positions. Writes directly to the in-memory store and broadcasts via WebSocket — does **not** forward to APRS-IS. Used by the `lora-relay` receiver.
 
 ```json
 [
@@ -189,7 +189,7 @@ Polls the APRS.fi HTTP API at a configurable interval for a fixed list of callsi
 Positions arrive via `POST /api/gps` pushed by the **DMR-parser** bridge service (`DMR-parser/` in the repo root). The bridge reads DSD+ output (which decodes DMR digital audio from an HD1 radio connected via audio cable), extracts DMR-ID + GPS coordinates, resolves the callsign via RadioID.net, and posts only when GPS data is present. The `source` field on these positions is `"dmr"`.
 
 ### Relay (`relay`)
-Positions arrive via `POST /api/relay` from the `aprs-relay` receiver service. This is used in split deployments where the repeater site and command center are connected via an internet-independent link (LoRa, point-to-point WiFi, TCP). Relay positions are stored directly — they are not forwarded to APRS-IS.
+Positions arrive via `POST /api/relay` from the `lora-relay` receiver service. This is used in split deployments where the repeater site and command center are connected via an internet-independent link (LoRa, point-to-point WiFi, TCP). Relay positions are stored directly — they are not forwarded to APRS-IS.
 
 When `RELAY_WEBHOOK_URL` is configured, the backend POSTs each new position (fire-and-forget) to the relay sender's webhook endpoint, feeding the outbound sync pipeline.
 

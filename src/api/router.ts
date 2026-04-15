@@ -102,7 +102,7 @@ router.post('/gps', requireApiKey, (req: Request, res: Response) => {
   res.status(202).json({ status: 'forwarded', callsign: position.callsign });
 });
 
-// Relay ingest — accepts batched positions from aprs-relay receiver.
+// Relay ingest — accepts batched positions from lora-relay receiver.
 // Writes directly to store + broadcasts via Socket.io (no APRS-IS forward).
 router.post('/relay', requireApiKey, async (req: Request, res: Response) => {
   const positions = Array.isArray(req.body) ? req.body : [req.body];

@@ -113,7 +113,7 @@ async function handlePosition(pos: Position): Promise<void> {
   if (accepted) {
     broadcastPosition(pos);
 
-    // Notify aprs-relay sender if configured (fire-and-forget, non-blocking)
+    // Notify lora-relay sender if configured (fire-and-forget, non-blocking)
     if (config.relayWebhookUrl) {
       fetch(config.relayWebhookUrl, {
         method: 'POST',

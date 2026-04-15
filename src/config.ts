@@ -46,7 +46,7 @@ export const config = {
   dmrComment: process.env.DMR_COMMENT ?? '',
 
   // Relay webhook: when set, backend POSTs each new position here (fire-and-forget).
-  // Used by aprs-relay sender running on the same machine.
+  // Used by lora-relay sender running on the same machine.
   relayWebhookUrl: process.env.RELAY_WEBHOOK_URL ?? '',
 } as const;
 
