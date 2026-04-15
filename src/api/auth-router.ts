@@ -3,11 +3,14 @@ import path from 'path';
 import fs from 'fs';
 import { queryOne, run, uuid } from '../services/database';
 import { getSupabase } from '../services/supabase';
+import { config } from '../config';
 import { UserProfile } from '../types';
 
 const router = Router();
 
-const AVATARS_DIR = path.resolve('data', 'avatars');
+// Derive avatars dir from the same base directory as the SQLite database
+// so both live on the persistent volume in production (Fly.io)
+const AVATARS_DIR = path.join(path.dirname(config.sqlite.path), 'avatars');
 
 /** Map a DB row to a UserProfile. */
 function rowToProfile(row: Record<string, unknown>): UserProfile {

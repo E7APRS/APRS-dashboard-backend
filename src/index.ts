@@ -18,8 +18,8 @@ import { startFixedStations } from './services/fixed-stations';
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
 app.use(express.json({ limit: '5mb' }));
-// Serve avatar images
-app.use('/avatars', express.static(path.resolve('data', 'avatars')));
+// Serve avatar images from same base dir as SQLite (persistent volume in production)
+app.use('/avatars', express.static(path.join(path.dirname(config.sqlite.path), 'avatars')));
 // POST /api/gps uses its own API key auth (for DSD+ forwarder); all other /api routes require JWT
 app.use('/api', (req, res, next) => {
   if (req.method === 'POST' && (req.path === '/gps' || req.path === '/relay')) return next();
