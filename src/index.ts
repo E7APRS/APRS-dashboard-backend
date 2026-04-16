@@ -22,6 +22,7 @@ import {
   setHealthChangeCallback,
   getAllHealth,
 } from './services/source-health';
+import { startSync } from './services/sync';
 
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
@@ -140,6 +141,7 @@ async function boot(): Promise<void> {
 
   await warmCache();
   startJournalReplay();
+  startSync();
   startHealthMonitor();
   setHealthChangeCallback((health) => broadcast('sources:health', health));
 
