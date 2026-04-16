@@ -10,6 +10,9 @@ import { Position, Device } from '../types';
 import { queryAll, run } from './database';
 import { getSupabase } from './supabase';
 import { appendToJournal } from './supabase-journal';
+import { latLngToCell, gridDisk } from 'h3-js';
+
+const H3_RESOLUTION = 9; // ~174m hexagon edge
 
 const HISTORY_LIMIT = 100;
 const MAX_DEVICES   = 5000; // guard against unbounded cache growth
@@ -179,14 +182,15 @@ export async function addPosition(pos: Position): Promise<boolean> {
       );
     }
 
+    const h3Index = latLngToCell(pos.lat, pos.lon, H3_RESOLUTION);
     run(
-      `INSERT INTO positions (radio_id, callsign, lat, lon, altitude, speed, course, comment, symbol, symbol_table, source, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO positions (radio_id, callsign, lat, lon, altitude, speed, course, comment, symbol, symbol_table, source, timestamp, h3_index)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         pos.radioId, pos.callsign, pos.lat, pos.lon,
         pos.altitude ?? null, pos.speed ?? null, pos.course ?? null,
         pos.comment ?? null, pos.symbol ?? null, pos.symbolTable ?? null,
-        pos.source, pos.timestamp,
+        pos.source, pos.timestamp, h3Index,
       ],
     );
   } catch (err) {
@@ -287,6 +291,81 @@ export async function getHistoryFromDb(radioId: string, limit = 500): Promise<Po
     timestamp:   row.timestamp,
     source:      row.source as Position['source'],
   })).reverse();
+}
+
+// ─── Read (H3 spatial query) ─────────────────────────────────────────────────
+
+export function getDevicesInRadius(lat: number, lon: number, radiusKm: number): Position[] {
+  // Use H3 k-ring to find candidate hexagons, then filter by actual distance
+  const centerCell = latLngToCell(lat, lon, H3_RESOLUTION);
+  // Approximate k from radius: at res 9, edge length ~174m, so k ≈ radius / 0.174
+  const k = Math.max(1, Math.ceil(radiusKm / 0.174));
+  const cells = gridDisk(centerCell, Math.min(k, 100));
+
+  if (cells.length === 0) return [];
+
+  const placeholders = cells.map(() => '?').join(',');
+  const rows = queryAll<Record<string, unknown>>(
+    `SELECT * FROM positions WHERE h3_index IN (${placeholders}) ORDER BY timestamp DESC LIMIT 5000`,
+    cells,
+  );
+
+  // Deduplicate: keep latest position per radio_id
+  const seen = new Set<string>();
+  const result: Position[] = [];
+  for (const row of rows) {
+    const radioId = row.radio_id as string;
+    if (seen.has(radioId)) continue;
+    seen.add(radioId);
+    result.push(rowToPosition(row));
+  }
+
+  return result;
+}
+
+// ─── Read (database — time-range query for historical playback) ─────────────
+
+export async function getHistoryRange(start: string, end: string): Promise<Position[]> {
+  try {
+    const rows = queryAll<Record<string, unknown>>(
+      `SELECT * FROM positions
+       WHERE timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC
+       LIMIT 10000`,
+      [start, end],
+    );
+    return rows.map(rowToPosition);
+  } catch (err) {
+    console.warn('[store] SQLite history range read failed, falling back to Supabase:', (err as Error).message);
+  }
+
+  const { data, error } = await getSupabase()
+    .from('positions')
+    .select('*')
+    .gte('timestamp', start)
+    .lte('timestamp', end)
+    .order('timestamp', { ascending: true })
+    .limit(10000);
+
+  if (error) {
+    console.error('[store] Supabase getHistoryRange error:', error.message);
+    return [];
+  }
+
+  return (data ?? []).map(row => ({
+    radioId:     row.radio_id,
+    callsign:    row.callsign,
+    lat:         row.lat,
+    lon:         row.lon,
+    altitude:    row.altitude     ?? undefined,
+    speed:       row.speed        ?? undefined,
+    course:      row.course       ?? undefined,
+    comment:     row.comment      ?? undefined,
+    symbol:      row.symbol       ?? undefined,
+    symbolTable: row.symbol_table ?? undefined,
+    timestamp:   row.timestamp,
+    source:      row.source as Position['source'],
+  }));
 }
 
 // ─── Cache warm-up on startup (union merge) ─────────────────────────────────

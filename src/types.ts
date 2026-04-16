@@ -10,7 +10,7 @@ export interface Position {
   symbol?: string;       // APRS symbol code e.g. '-', '#', '['
   symbolTable?: string;  // '/' = primary table, '\' = alternate table
   timestamp: string;
-  source: 'aprsfi' | 'aprsis' | 'simulator' | 'fixed' | 'dmr' | 'relay';
+  source: 'aprsfi' | 'aprsis' | 'simulator' | 'fixed' | 'dmr' | 'relay' | 'meshtastic' | 'mqtt';
 }
 
 export interface Device {
@@ -22,7 +22,7 @@ export interface Device {
   lastSeenAgeMs?: number; // milliseconds since last position
 }
 
-export type DataSource = 'aprsfi' | 'aprsis' | 'simulator' | 'fixed' | 'dmr' | 'relay';
+export type DataSource = 'aprsfi' | 'aprsis' | 'simulator' | 'fixed' | 'dmr' | 'relay' | 'meshtastic' | 'mqtt';
 
 export interface UserProfile {
   id: string;

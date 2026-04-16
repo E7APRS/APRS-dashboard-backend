@@ -48,6 +48,38 @@ export const config = {
   // Relay webhook: when set, backend POSTs each new position here (fire-and-forget).
   // Used by lora-relay sender running on the same machine.
   relayWebhookUrl: process.env.RELAY_WEBHOOK_URL ?? '',
+
+  // Meshtastic MQTT bridge
+  meshtastic: {
+    brokerUrl:  process.env.MESHTASTIC_MQTT_URL ?? 'mqtt://mqtt.meshtastic.org',
+    topic:      process.env.MESHTASTIC_MQTT_TOPIC ?? 'msh/EU_868/2/json/#',
+    username:   process.env.MESHTASTIC_MQTT_USER ?? 'meshdev',
+    password:   process.env.MESHTASTIC_MQTT_PASS ?? 'large4cats',
+  },
+
+  // Generic MQTT ingestion
+  mqtt: {
+    brokerUrl: process.env.MQTT_BROKER_URL ?? '',
+    topic:     process.env.MQTT_TOPIC ?? 'tracking/#',
+    username:  process.env.MQTT_USERNAME ?? '',
+    password:  process.env.MQTT_PASSWORD ?? '',
+  },
+
+  // Federation peers (comma-separated URLs of other E7APRS instances)
+  federationPeers: (process.env.FEDERATION_PEERS ?? '').split(',').map(s => s.trim()).filter(Boolean),
+
+  // TAK Server bridge
+  tak: {
+    serverHost: process.env.TAK_SERVER_HOST ?? '',
+    serverPort: parseInt(process.env.TAK_SERVER_PORT ?? '8087', 10),
+    enabled:    process.env.TAK_ENABLED === 'true',
+  },
+
+  // CAP alert feed
+  cap: {
+    feedUrl:      process.env.CAP_FEED_URL ?? '',
+    pollInterval: parseInt(process.env.CAP_POLL_INTERVAL ?? '300000', 10), // 5 minutes
+  },
 } as const;
 
 export const isEnabled = (source: DataSource): boolean =>

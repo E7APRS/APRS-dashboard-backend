@@ -8,13 +8,17 @@ import { DataSource, Position } from '../types';
 import { markSourceEnabled, markSourceDisabled } from './source-health';
 import { startAprsfiPoller } from './aprsfi';
 import { startAprsis } from './aprsis';
+import { startMeshtastic } from './meshtastic';
+import { startMqttSource } from './mqtt-source';
 
 type StopFn = () => void;
 type SourceFactory = (onPosition: (pos: Position) => void) => StopFn;
 
 const factories: Partial<Record<DataSource, SourceFactory>> = {
-  aprsfi: (cb) => startAprsfiPoller(cb),
-  aprsis: (cb) => startAprsis(cb),
+  aprsfi:     (cb) => startAprsfiPoller(cb),
+  aprsis:     (cb) => startAprsis(cb),
+  meshtastic: (cb) => startMeshtastic(cb),
+  mqtt:       (cb) => startMqttSource(cb),
 };
 
 const running = new Map<DataSource, StopFn>();

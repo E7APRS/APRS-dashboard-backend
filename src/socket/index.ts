@@ -5,6 +5,8 @@ import { config } from '../config';
 import { getLatestPositions, getAllDevices, getHistory } from '../services/store';
 import { getSupabase } from '../services/supabase';
 import { getAllHealth } from '../services/source-health';
+import { getActiveCapAlerts } from '../services/cap';
+import { getAllGeofences } from '../services/geofence';
 
 let io: SocketServer | null = null;
 
@@ -31,6 +33,8 @@ export function initSocket(server: HttpServer): SocketServer {
     }
     socket.emit('history:snapshot', historySnap);
     socket.emit('sources:health', getAllHealth());
+    socket.emit('cap:alerts', getActiveCapAlerts());
+    socket.emit('geofences:snapshot', getAllGeofences());
   }
 
   io.on('connection', socket => {

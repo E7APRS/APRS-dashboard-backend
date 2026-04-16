@@ -19,15 +19,19 @@ import {
   setHealthChangeCallback,
 } from './services/source-health';
 import { startSync } from './services/sync';
+import { checkGeofences } from './services/geofence';
+import { startCapPoller } from './services/cap';
+import { startTakBridge, sendToTak } from './services/tak-bridge';
+import { federatePosition, receiveFederatedPosition } from './services/federation';
 
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
 app.use(express.json({ limit: '5mb' }));
 // Serve avatar images from same base dir as SQLite (persistent volume in production)
 app.use('/avatars', express.static(path.join(path.dirname(config.sqlite.path), 'avatars')));
-// POST /api/gps uses its own API key auth (for DSD+ forwarder); all other /api routes require JWT
+// POST /api/gps, /api/relay, /api/federation/receive use API key auth; all other /api routes require JWT
 app.use('/api', (req, res, next) => {
-  if (req.method === 'POST' && (req.path === '/gps' || req.path === '/relay')) return next();
+  if (req.method === 'POST' && (req.path === '/gps' || req.path === '/relay' || req.path === '/federation/receive')) return next();
   return requireAuth(req, res, next);
 });
 app.use('/api', apiRouter);
@@ -118,6 +122,9 @@ async function handlePosition(pos: Position): Promise<void> {
   if (accepted) {
     recordPosition(pos.source);
     broadcastPosition(pos);
+    checkGeofences(pos);
+    sendToTak(pos);
+    federatePosition(pos);
 
     // Notify lora-relay sender if configured (fire-and-forget, non-blocking)
     if (config.relayWebhookUrl) {
@@ -147,6 +154,12 @@ async function boot(): Promise<void> {
   for (const source of config.dataSources) {
     startSource(source);
   }
+
+  // Start CAP alert poller (independent of data sources)
+  startCapPoller();
+
+  // Start TAK Server bridge if configured
+  startTakBridge();
 
   console.log('[boot] Active sources:', getRunning().join(', ') || 'none');
 

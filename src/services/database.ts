@@ -101,6 +101,19 @@ export function initDatabase(): void {
 
     CREATE INDEX IF NOT EXISTS idx_profiles_auth_id ON profiles(auth_id);
     CREATE INDEX IF NOT EXISTS idx_profiles_email   ON profiles(email);
+
+    -- Geofences table (polygon zones for SAR operations)
+    CREATE TABLE IF NOT EXISTS geofences (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      geometry    TEXT NOT NULL,
+      color       TEXT DEFAULT '#ef4444',
+      active      INTEGER DEFAULT 1,
+      created_by  TEXT,
+      created_at  TEXT DEFAULT (datetime('now')),
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   // Migrations for existing databases
@@ -108,6 +121,10 @@ export function initDatabase(): void {
   try { d.exec(`ALTER TABLE profiles ADD COLUMN avatar_url TEXT`); } catch { /* already exists */ }
   try { d.exec(`ALTER TABLE profiles ADD COLUMN country TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
   try { d.exec(`ALTER TABLE profiles ADD COLUMN qth_locator TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
+
+  // H3 spatial index column on positions
+  try { d.exec(`ALTER TABLE positions ADD COLUMN h3_index TEXT`); } catch { /* already exists */ }
+  try { d.exec(`CREATE INDEX IF NOT EXISTS idx_positions_h3 ON positions(h3_index)`); } catch { /* already exists */ }
 
   // Trim trigger — keep last 500 positions per radio_id
   d.exec(`
