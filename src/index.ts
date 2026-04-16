@@ -8,13 +8,20 @@ import { Position } from './types';
 import apiRouter from './api/router';
 import authRouter from './api/auth-router';
 import { requireAuth } from './middleware/requireAuth';
-import { initSocket, broadcastPosition } from './socket/index';
+import { initSocket, broadcast, broadcastPosition } from './socket/index';
 import { addPosition, getAllDevices, warmCache } from './services/store';
 import { initDatabase } from './services/database';
 import { startAprsfiPoller } from './services/aprsfi';
 import { startAprsis } from './services/aprsis';
 import { startFixedStations } from './services/fixed-stations';
 import { startJournalReplay } from './services/supabase-journal';
+import {
+  markSourceEnabled,
+  recordPosition,
+  startHealthMonitor,
+  setHealthChangeCallback,
+  getAllHealth,
+} from './services/source-health';
 
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
@@ -112,6 +119,7 @@ initSocket(server);
 async function handlePosition(pos: Position): Promise<void> {
   const accepted = await addPosition(pos);
   if (accepted) {
+    recordPosition(pos.source);
     broadcastPosition(pos);
 
     // Notify lora-relay sender if configured (fire-and-forget, non-blocking)
@@ -132,12 +140,14 @@ async function boot(): Promise<void> {
 
   await warmCache();
   startJournalReplay();
+  startHealthMonitor();
+  setHealthChangeCallback((health) => broadcast('sources:health', health));
 
   console.log('[boot] Active sources:', config.dataSources.join(', '));
 
   // startFixedStations(handlePosition);
-  if (isEnabled('aprsfi')) startAprsfiPoller(handlePosition);
-  if (isEnabled('aprsis')) startAprsis(handlePosition);
+  if (isEnabled('aprsfi')) { markSourceEnabled('aprsfi'); startAprsfiPoller(handlePosition); }
+  if (isEnabled('aprsis')) { markSourceEnabled('aprsis'); startAprsis(handlePosition); }
 
   if (config.dataSources.length === 0) {
     console.log('[boot] No sources enabled — manual POST /api/gps only');

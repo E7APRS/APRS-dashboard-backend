@@ -10,6 +10,8 @@ import { config } from '../config';
 import { Position } from '../types';
 import { forwardToAprsis } from '../services/aprs-forwarder';
 import { broadcastPosition } from '../socket/index';
+import { getAllHealth } from '../services/source-health';
+import { getJournalStats } from '../services/supabase-journal';
 
 // Middleware: require X-Api-Key header matching GPS_API_KEY env var.
 // Skipped if GPS_API_KEY is not configured (development convenience).
@@ -39,6 +41,14 @@ router.get('/status', (_req: Request, res: Response) => {
       enabled: config.dataSources.includes('aprsis'),
       filter:  config.aprsis.filter,
     },
+  });
+});
+
+// Source health status
+router.get('/sources/health', (_req: Request, res: Response) => {
+  res.json({
+    sources: getAllHealth(),
+    journal: getJournalStats(),
   });
 });
 

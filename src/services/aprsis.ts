@@ -11,6 +11,7 @@
 import net from 'net';
 import { Position } from '../types';
 import { config } from '../config';
+import { recordError, recordConnectionAttempt } from './source-health';
 
 const DEBUG = process.env.APRSIS_DEBUG === '1';
 
@@ -120,6 +121,7 @@ export function startAprsis(onPosition: (pos: Position) => void): () => void {
     if (stopped) return;
 
     console.log(`[aprsis] Connecting to ${host}:${port} — filter: "${filter}"`);
+    recordConnectionAttempt('aprsis');
     socket = new net.Socket();
     let buffer = '';
 
@@ -170,6 +172,7 @@ export function startAprsis(onPosition: (pos: Position) => void): () => void {
 
     socket.on('error', err => {
       console.error('[aprsis] Socket error:', err.message);
+      recordError('aprsis', err.message);
     });
 
     socket.on('close', () => {

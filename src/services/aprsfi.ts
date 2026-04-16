@@ -10,6 +10,7 @@
  */
 import { Position } from '../types';
 import { config } from '../config';
+import { recordError } from './source-health';
 
 const APRSFI_BASE_URL = 'https://api.aprs.fi/api/get';
 
@@ -115,6 +116,7 @@ export function startAprsfiPoller(onPosition: (pos: Position) => void): () => vo
     } catch (err) {
       failStreak++;
       const delay = backoffDelay();
+      recordError('aprsfi', (err as Error).message ?? String(err));
       console.error(`[aprsfi] Poll error (streak=${failStreak}, next in ${delay / 1000}s):`, err);
       // Override next schedule with backoff delay
       if (timer) clearTimeout(timer);

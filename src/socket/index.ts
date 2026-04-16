@@ -4,6 +4,7 @@ import { Position } from '../types';
 import { config } from '../config';
 import { getLatestPositions, getAllDevices, getHistory } from '../services/store';
 import { getSupabase } from '../services/supabase';
+import { getAllHealth } from '../services/source-health';
 
 let io: SocketServer | null = null;
 
@@ -29,6 +30,7 @@ export function initSocket(server: HttpServer): SocketServer {
       if (trail.length > 0) historySnap[device.radioId] = trail;
     }
     socket.emit('history:snapshot', historySnap);
+    socket.emit('sources:health', getAllHealth());
   }
 
   io.on('connection', socket => {
