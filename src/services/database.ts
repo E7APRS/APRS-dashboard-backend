@@ -80,6 +80,7 @@ export function initDatabase(): void {
 
     CREATE INDEX IF NOT EXISTS idx_positions_radio_id  ON positions(radio_id);
     CREATE INDEX IF NOT EXISTS idx_positions_timestamp ON positions(timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_positions_radio_ts  ON positions(radio_id, timestamp);
 
     -- User profiles table
     CREATE TABLE IF NOT EXISTS profiles (
