@@ -14,6 +14,11 @@ import { appendToJournal } from './supabase-journal';
 const HISTORY_LIMIT = 100;
 const MAX_DEVICES   = 5000; // guard against unbounded cache growth
 
+// Content-based dedup: positions within this lat/lon tolerance and time
+// window from the same callsign are considered duplicates across sources.
+const DEDUP_COORD_EPSILON = 0.0001;  // ~11 meters at the equator
+const DEDUP_TIME_WINDOW   = 30_000;  // 30 seconds
+
 // In-memory cache
 const positionCache  = new Map<string, Position[]>();
 const deviceCache    = new Map<string, Device>();
@@ -84,6 +89,8 @@ async function backupPositionToSupabase(pos: Position, isOverwrite: boolean): Pr
  *   - Skip if new timestamp is older than the latest stored position.
  *   - Skip if timestamps are equal and new source is not 'aprsis' (APRS-IS has priority).
  *   - Overwrite (replace history entry + DB row) if timestamps are equal and new source IS 'aprsis'.
+ *   - Content-based dedup: skip if another source already delivered a position
+ *     with the same lat/lon (within ~11m) in the last 30s.
  *   - Normal insert when new timestamp is strictly newer.
  *
  * Returns true if the position was accepted and stored, false if it was dropped.
@@ -107,6 +114,18 @@ export async function addPosition(pos: Position): Promise<boolean> {
         return false;
       }
       isOverwrite = true;
+    }
+
+    // Content-based dedup: if a different source delivered a nearly identical
+    // position (same lat/lon within epsilon) within the time window, skip it.
+    // APRS-IS always wins over other sources for the same physical packet.
+    if (!isOverwrite && pos.source !== 'aprsis' && existingLatest.source !== pos.source) {
+      const timeDiff = Math.abs(newTime - existingTime);
+      const latDiff  = Math.abs(pos.lat - existingLatest.lat);
+      const lonDiff  = Math.abs(pos.lon - existingLatest.lon);
+      if (timeDiff <= DEDUP_TIME_WINDOW && latDiff <= DEDUP_COORD_EPSILON && lonDiff <= DEDUP_COORD_EPSILON) {
+        return false;
+      }
     }
   }
 
