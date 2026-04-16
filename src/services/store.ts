@@ -289,32 +289,74 @@ export async function getHistoryFromDb(radioId: string, limit = 500): Promise<Po
   })).reverse();
 }
 
-// ─── Cache warm-up on startup ────────────────────────────────────────────────
+// ─── Cache warm-up on startup (union merge) ─────────────────────────────────
+
+/** Merge a position into the history cache, maintaining sort order and limit. */
+function mergeIntoHistory(radioId: string, pos: Position): void {
+  const history = positionCache.get(radioId) ?? [];
+
+  // Skip if already have this exact position (same timestamp + source)
+  if (history.some(p => p.timestamp === pos.timestamp && p.source === pos.source)) return;
+
+  // Insert in sorted order by timestamp
+  let inserted = false;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (new Date(history[i].timestamp).getTime() <= new Date(pos.timestamp).getTime()) {
+      history.splice(i + 1, 0, pos);
+      inserted = true;
+      break;
+    }
+  }
+  if (!inserted) history.unshift(pos);
+
+  // Trim to limit
+  while (history.length > HISTORY_LIMIT) history.shift();
+
+  positionCache.set(radioId, history);
+}
+
+/** Merge a device into the device cache, keeping the one with newer lastSeen. */
+function mergeDevice(row: { radio_id: string; callsign: string; last_seen: string; last_lat: number; last_lon: number; source?: string }): void {
+  const existing = deviceCache.get(row.radio_id);
+  const newTime = new Date(row.last_seen).getTime();
+
+  if (existing && new Date(existing.lastSeen).getTime() >= newTime) return;
+
+  const lastPosition: Position = {
+    radioId:   row.radio_id,
+    callsign:  row.callsign,
+    lat:       row.last_lat,
+    lon:       row.last_lon,
+    timestamp: row.last_seen,
+    source:    (row.source ?? 'aprsfi') as Position['source'],
+  };
+
+  deviceCache.set(row.radio_id, {
+    radioId:      row.radio_id,
+    callsign:     row.callsign,
+    lastSeen:     row.last_seen,
+    lastPosition,
+  });
+}
 
 export async function warmCache(): Promise<void> {
-  let loaded = false;
+  let sqliteDevices = 0;
+  let sqlitePositions = 0;
 
-  // Try local SQLite first
+  // ── Phase 1: Load from SQLite ──────────────────────────────────────────────
   try {
     const devices = queryAll<Record<string, unknown>>('SELECT * FROM devices');
-
     for (const row of devices) {
-      const lastPosition: Position = {
-        radioId:   row.radio_id as string,
+      mergeDevice({
+        radio_id:  row.radio_id as string,
         callsign:  row.callsign as string,
-        lat:       row.last_lat as number,
-        lon:       row.last_lon as number,
-        timestamp: row.last_seen as string,
-        source:    (row.source ?? 'aprsfi') as Position['source'],
-      };
-
-      deviceCache.set(row.radio_id as string, {
-        radioId:      row.radio_id as string,
-        callsign:     row.callsign as string,
-        lastSeen:     row.last_seen as string,
-        lastPosition,
+        last_seen: row.last_seen as string,
+        last_lat:  row.last_lat as number,
+        last_lon:  row.last_lon as number,
+        source:    row.source as string | undefined,
       });
     }
+    sqliteDevices = devices.length;
 
     if (deviceCache.size > 0) {
       const radioIds = Array.from(deviceCache.keys());
@@ -325,56 +367,31 @@ export async function warmCache(): Promise<void> {
       );
 
       for (const row of positions) {
-        const radioId = row.radio_id as string;
-        const history = positionCache.get(radioId) ?? [];
-        history.push(rowToPosition(row));
-        if (history.length > HISTORY_LIMIT) history.shift();
-        positionCache.set(radioId, history);
+        mergeIntoHistory(row.radio_id as string, rowToPosition(row));
       }
-
-      // Back-fill deviceCache.lastPosition with symbol info from positionCache
-      for (const [radioId, history] of positionCache.entries()) {
-        const latest = history.at(-1);
-        if (!latest) continue;
-        const device = deviceCache.get(radioId);
-        if (device) device.lastPosition = latest;
-      }
+      sqlitePositions = positions.length;
     }
 
-    loaded = true;
-    console.log(`[store] Cache warmed from SQLite — ${deviceCache.size} device(s), ${
-      Array.from(positionCache.values()).reduce((s, h) => s + h.length, 0)
-    } position(s)`);
+    console.log(`[store] SQLite: ${sqliteDevices} device(s), ${sqlitePositions} position(s)`);
   } catch (err) {
-    console.warn('[store] SQLite warm-up failed, falling back to Supabase:', (err as Error).message);
+    console.warn('[store] SQLite warm-up failed:', (err as Error).message);
   }
 
-  // Fallback to Supabase if local SQLite failed
-  if (!loaded) {
-    const sb = getSupabase();
+  // ── Phase 2: Merge from Supabase (additive — fills gaps) ──────────────────
+  let supabaseDevices = 0;
+  let supabasePositions = 0;
 
+  try {
+    const sb = getSupabase();
     const { data: devices, error: devErr } = await sb.from('devices').select('*');
+
     if (devErr) {
       console.warn('[store] warmCache Supabase devices error:', devErr.message);
-      return;
-    }
-
-    for (const row of devices ?? []) {
-      const lastPosition: Position = {
-        radioId:   row.radio_id,
-        callsign:  row.callsign,
-        lat:       row.last_lat,
-        lon:       row.last_lon,
-        timestamp: row.last_seen,
-        source:    row.source ?? 'aprsfi',
-      };
-
-      deviceCache.set(row.radio_id, {
-        radioId:      row.radio_id,
-        callsign:     row.callsign,
-        lastSeen:     row.last_seen,
-        lastPosition,
-      });
+    } else {
+      for (const row of devices ?? []) {
+        mergeDevice(row);
+      }
+      supabaseDevices = (devices ?? []).length;
     }
 
     if (deviceCache.size > 0) {
@@ -389,8 +406,7 @@ export async function warmCache(): Promise<void> {
         console.warn('[store] warmCache Supabase positions error:', posErr.message);
       } else {
         for (const row of positions ?? []) {
-          const history = positionCache.get(row.radio_id) ?? [];
-          history.push({
+          mergeIntoHistory(row.radio_id, {
             radioId:     row.radio_id,
             callsign:    row.callsign,
             lat:         row.lat,
@@ -404,21 +420,24 @@ export async function warmCache(): Promise<void> {
             timestamp:   row.timestamp,
             source:      (row.source ?? 'aprsfi') as Position['source'],
           });
-          if (history.length > HISTORY_LIMIT) history.shift();
-          positionCache.set(row.radio_id, history);
         }
-
-        for (const [radioId, history] of positionCache.entries()) {
-          const latest = history.at(-1);
-          if (!latest) continue;
-          const device = deviceCache.get(radioId);
-          if (device) device.lastPosition = latest;
-        }
+        supabasePositions = (positions ?? []).length;
       }
     }
 
-    console.log(`[store] Cache warmed from Supabase (fallback) — ${deviceCache.size} device(s), ${
-      Array.from(positionCache.values()).reduce((s, h) => s + h.length, 0)
-    } position(s)`);
+    console.log(`[store] Supabase: ${supabaseDevices} device(s), ${supabasePositions} position(s)`);
+  } catch (err) {
+    console.warn('[store] Supabase warm-up failed:', (err as Error).message);
   }
+
+  // ── Phase 3: Back-fill deviceCache.lastPosition from merged history ────────
+  for (const [radioId, history] of positionCache.entries()) {
+    const latest = history.at(-1);
+    if (!latest) continue;
+    const device = deviceCache.get(radioId);
+    if (device) device.lastPosition = latest;
+  }
+
+  const totalPositions = Array.from(positionCache.values()).reduce((s, h) => s + h.length, 0);
+  console.log(`[store] Cache warmed (merged) — ${deviceCache.size} device(s), ${totalPositions} position(s)`);
 }
