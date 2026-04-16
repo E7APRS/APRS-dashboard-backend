@@ -9,6 +9,7 @@
 import { Position, Device } from '../types';
 import { queryAll, run } from './database';
 import { getSupabase } from './supabase';
+import { appendToJournal } from './supabase-journal';
 
 const HISTORY_LIMIT = 100;
 const MAX_DEVICES   = 5000; // guard against unbounded cache growth
@@ -20,21 +21,40 @@ const deviceCache    = new Map<string, Device>();
 // ─── Supabase backup (fire-and-forget) ───────────────────────────────────────
 
 async function backupDeviceToSupabase(pos: Position): Promise<void> {
+  const payload = {
+    radio_id:  pos.radioId,
+    callsign:  pos.callsign,
+    last_seen: pos.timestamp,
+    last_lat:  pos.lat,
+    last_lon:  pos.lon,
+  };
   try {
-    const { error } = await getSupabase().from('devices').upsert({
-      radio_id:  pos.radioId,
-      callsign:  pos.callsign,
-      last_seen: pos.timestamp,
-      last_lat:  pos.lat,
-      last_lon:  pos.lon,
-    }, { onConflict: 'radio_id' });
-    if (error) console.warn('[store] Supabase device backup failed:', error.message);
+    const { error } = await getSupabase().from('devices').upsert(payload, { onConflict: 'radio_id' });
+    if (error) {
+      console.warn('[store] Supabase device backup failed, journaling:', error.message);
+      appendToJournal({ ts: new Date().toISOString(), table: 'devices', op: 'upsert', payload });
+    }
   } catch (err) {
-    console.warn('[store] Supabase device backup error:', (err as Error).message);
+    console.warn('[store] Supabase device backup error, journaling:', (err as Error).message);
+    appendToJournal({ ts: new Date().toISOString(), table: 'devices', op: 'upsert', payload });
   }
 }
 
 async function backupPositionToSupabase(pos: Position, isOverwrite: boolean): Promise<void> {
+  const payload = {
+    radio_id:     pos.radioId,
+    callsign:     pos.callsign,
+    lat:          pos.lat,
+    lon:          pos.lon,
+    altitude:     pos.altitude     ?? null,
+    speed:        pos.speed        ?? null,
+    course:       pos.course       ?? null,
+    comment:      pos.comment      ?? null,
+    symbol:       pos.symbol       ?? null,
+    symbol_table: pos.symbolTable  ?? null,
+    source:       pos.source,
+    timestamp:    pos.timestamp,
+  };
   try {
     const sb = getSupabase();
     if (isOverwrite) {
@@ -42,23 +62,18 @@ async function backupPositionToSupabase(pos: Position, isOverwrite: boolean): Pr
         .eq('radio_id', pos.radioId)
         .eq('timestamp', pos.timestamp);
     }
-    const { error } = await sb.from('positions').insert({
-      radio_id:     pos.radioId,
-      callsign:     pos.callsign,
-      lat:          pos.lat,
-      lon:          pos.lon,
-      altitude:     pos.altitude     ?? null,
-      speed:        pos.speed        ?? null,
-      course:       pos.course       ?? null,
-      comment:      pos.comment      ?? null,
-      symbol:       pos.symbol       ?? null,
-      symbol_table: pos.symbolTable  ?? null,
-      source:       pos.source,
-      timestamp:    pos.timestamp,
-    });
-    if (error) console.warn('[store] Supabase position backup failed:', error.message);
+    const { error } = await sb.from('positions').insert(payload);
+    if (error) {
+      console.warn('[store] Supabase position backup failed, journaling:', error.message);
+      const op = isOverwrite ? 'delete_insert' as const : 'insert' as const;
+      const deleteMatch = isOverwrite ? { radio_id: pos.radioId, timestamp: pos.timestamp } : undefined;
+      appendToJournal({ ts: new Date().toISOString(), table: 'positions', op, payload, deleteMatch });
+    }
   } catch (err) {
-    console.warn('[store] Supabase position backup error:', (err as Error).message);
+    console.warn('[store] Supabase position backup error, journaling:', (err as Error).message);
+    const op = isOverwrite ? 'delete_insert' as const : 'insert' as const;
+    const deleteMatch = isOverwrite ? { radio_id: pos.radioId, timestamp: pos.timestamp } : undefined;
+    appendToJournal({ ts: new Date().toISOString(), table: 'positions', op, payload, deleteMatch });
   }
 }
 

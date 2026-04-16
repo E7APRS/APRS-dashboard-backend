@@ -14,6 +14,7 @@ import { initDatabase } from './services/database';
 import { startAprsfiPoller } from './services/aprsfi';
 import { startAprsis } from './services/aprsis';
 import { startFixedStations } from './services/fixed-stations';
+import { startJournalReplay } from './services/supabase-journal';
 
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
@@ -130,6 +131,7 @@ async function boot(): Promise<void> {
   await initDatabase();
 
   await warmCache();
+  startJournalReplay();
 
   console.log('[boot] Active sources:', config.dataSources.join(', '));
 
