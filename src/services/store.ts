@@ -201,14 +201,24 @@ export async function addPosition(pos: Position): Promise<boolean> {
   return true;
 }
 
+// ─── Staleness ───────────────────────────────────────────────────────────────
+
+const STALE_THRESHOLD_MS = 10 * 60_000; // 10 minutes without update = stale
+
+function withStaleness(device: Device): Device {
+  const age = Date.now() - new Date(device.lastSeen).getTime();
+  return { ...device, stale: age > STALE_THRESHOLD_MS, lastSeenAgeMs: Math.max(0, age) };
+}
+
 // ─── Read (in-memory) ─────────────────────────────────────────────────────────
 
 export function getAllDevices(): Device[] {
-  return Array.from(deviceCache.values());
+  return Array.from(deviceCache.values()).map(withStaleness);
 }
 
 export function getDevice(radioId: string): Device | undefined {
-  return deviceCache.get(radioId);
+  const d = deviceCache.get(radioId);
+  return d ? withStaleness(d) : undefined;
 }
 
 export function getHistory(radioId: string): Position[] {

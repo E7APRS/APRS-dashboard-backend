@@ -18,6 +18,8 @@ export interface Device {
   callsign: string;
   lastSeen: string;
   lastPosition: Position;
+  stale?: boolean;        // true when no update received within STALE_THRESHOLD
+  lastSeenAgeMs?: number; // milliseconds since last position
 }
 
 export type DataSource = 'aprsfi' | 'aprsis' | 'simulator' | 'fixed' | 'dmr' | 'relay';
