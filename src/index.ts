@@ -3,7 +3,7 @@ import http from 'http';
 import path from 'path';
 import express from 'express';
 import cors from 'cors';
-import { config, isEnabled } from './config';
+import { config } from './config';
 import { Position } from './types';
 import apiRouter from './api/router';
 import authRouter from './api/auth-router';
@@ -11,16 +11,12 @@ import { requireAuth } from './middleware/requireAuth';
 import { initSocket, broadcast, broadcastPosition } from './socket/index';
 import { addPosition, getAllDevices, warmCache } from './services/store';
 import { initDatabase } from './services/database';
-import { startAprsfiPoller } from './services/aprsfi';
-import { startAprsis } from './services/aprsis';
-import { startFixedStations } from './services/fixed-stations';
+import { setPositionHandler, startSource, getRunning } from './services/source-manager';
 import { startJournalReplay } from './services/supabase-journal';
 import {
-  markSourceEnabled,
   recordPosition,
   startHealthMonitor,
   setHealthChangeCallback,
-  getAllHealth,
 } from './services/source-health';
 import { startSync } from './services/sync';
 
@@ -145,11 +141,14 @@ async function boot(): Promise<void> {
   startHealthMonitor();
   setHealthChangeCallback((health) => broadcast('sources:health', health));
 
-  console.log('[boot] Active sources:', config.dataSources.join(', '));
+  // Register the position handler and start configured sources via source manager
+  setPositionHandler(handlePosition);
 
-  // startFixedStations(handlePosition);
-  if (isEnabled('aprsfi')) { markSourceEnabled('aprsfi'); startAprsfiPoller(handlePosition); }
-  if (isEnabled('aprsis')) { markSourceEnabled('aprsis'); startAprsis(handlePosition); }
+  for (const source of config.dataSources) {
+    startSource(source);
+  }
+
+  console.log('[boot] Active sources:', getRunning().join(', ') || 'none');
 
   if (config.dataSources.length === 0) {
     console.log('[boot] No sources enabled — manual POST /api/gps only');

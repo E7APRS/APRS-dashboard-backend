@@ -7,11 +7,12 @@ import {
   getHistoryFromDb,
 } from '../services/store';
 import { config } from '../config';
-import { Position } from '../types';
+import { DataSource, Position } from '../types';
 import { forwardToAprsis } from '../services/aprs-forwarder';
 import { broadcastPosition } from '../socket/index';
 import { getAllHealth } from '../services/source-health';
 import { getJournalStats } from '../services/supabase-journal';
+import { startSource, stopSource, getRunning, isRunning } from '../services/source-manager';
 
 // Middleware: require X-Api-Key header matching GPS_API_KEY env var.
 // Skipped if GPS_API_KEY is not configured (development convenience).
@@ -50,6 +51,45 @@ router.get('/sources/health', (_req: Request, res: Response) => {
     sources: getAllHealth(),
     journal: getJournalStats(),
   });
+});
+
+// Runtime source management
+const TOGGLEABLE_SOURCES: DataSource[] = ['aprsfi', 'aprsis', 'simulator'];
+
+router.get('/sources', (_req: Request, res: Response) => {
+  res.json({
+    running: getRunning(),
+    available: TOGGLEABLE_SOURCES,
+    health: getAllHealth(),
+  });
+});
+
+router.post('/sources/:source/start', (req: Request, res: Response) => {
+  const source = req.params.source as DataSource;
+  if (!TOGGLEABLE_SOURCES.includes(source)) {
+    res.status(400).json({ error: `Unknown or non-toggleable source: ${source}` });
+    return;
+  }
+  if (isRunning(source)) {
+    res.json({ status: 'already_running', source });
+    return;
+  }
+  const started = startSource(source);
+  res.json({ status: started ? 'started' : 'failed', source });
+});
+
+router.post('/sources/:source/stop', (req: Request, res: Response) => {
+  const source = req.params.source as DataSource;
+  if (!TOGGLEABLE_SOURCES.includes(source)) {
+    res.status(400).json({ error: `Unknown or non-toggleable source: ${source}` });
+    return;
+  }
+  if (!isRunning(source)) {
+    res.json({ status: 'not_running', source });
+    return;
+  }
+  const stopped = stopSource(source);
+  res.json({ status: stopped ? 'stopped' : 'failed', source });
 });
 
 // List all known devices
