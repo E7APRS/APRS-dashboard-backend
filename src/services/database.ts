@@ -122,6 +122,9 @@ export function initDatabase(): void {
   try { d.exec(`ALTER TABLE profiles ADD COLUMN country TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
   try { d.exec(`ALTER TABLE profiles ADD COLUMN qth_locator TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
 
+  // Geofence per-user callsign targeting
+  try { d.exec(`ALTER TABLE geofences ADD COLUMN watched_callsigns TEXT DEFAULT ''`); } catch { /* already exists */ }
+
   // H3 spatial index column on positions
   try { d.exec(`ALTER TABLE positions ADD COLUMN h3_index TEXT`); } catch { /* already exists */ }
   try { d.exec(`CREATE INDEX IF NOT EXISTS idx_positions_h3 ON positions(h3_index)`); } catch { /* already exists */ }

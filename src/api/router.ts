@@ -14,7 +14,7 @@ import { broadcastPosition } from '../socket/index';
 import { getAllHealth } from '../services/source-health';
 import { getJournalStats } from '../services/supabase-journal';
 import { startSource, stopSource, getRunning, isRunning } from '../services/source-manager';
-import { getAllGeofences, getGeofence, createGeofence, updateGeofence, deleteGeofence } from '../services/geofence';
+import { getGeofencesByUser, getGeofenceWithOwnerCheck, createGeofence, updateGeofence, deleteGeofence } from '../services/geofence';
 import { getActiveCapAlerts } from '../services/cap';
 import { positionsToCot } from '../utils/cot';
 import { receiveFederatedPosition } from '../services/federation';
@@ -252,35 +252,43 @@ router.get('/cap/alerts', (_req: Request, res: Response) => {
 
 // ─── Geofence CRUD ───────────────────────────────────────────────────────────
 
-router.get('/geofences', (_req: Request, res: Response) => {
-  res.json(getAllGeofences());
+router.get('/geofences', (req: Request, res: Response) => {
+  res.json(getGeofencesByUser(req.authUserId!));
 });
 
 router.get('/geofences/:id', (req: Request, res: Response) => {
-  const fence = getGeofence(req.params.id);
+  const fence = getGeofenceWithOwnerCheck(req.params.id, req.authUserId!);
   if (!fence) { res.status(404).json({ error: 'Geofence not found' }); return; }
   res.json(fence);
 });
 
 router.post('/geofences', (req: Request, res: Response) => {
-  const { name, description, geometry, color } = req.body;
+  const { name, description, geometry, color, watchedCallsigns } = req.body;
   if (!name || !geometry) {
     res.status(400).json({ error: 'Missing required fields: name, geometry' });
     return;
   }
-  const fence = createGeofence({ name, description, geometry, color });
+  const fence = createGeofence({
+    name, description, geometry, color,
+    createdBy: req.authUserId!,
+    watchedCallsigns: watchedCallsigns ?? [],
+  });
   res.status(201).json(fence);
 });
 
 router.put('/geofences/:id', (req: Request, res: Response) => {
+  if (!getGeofenceWithOwnerCheck(req.params.id, req.authUserId!)) {
+    res.status(404).json({ error: 'Geofence not found' }); return;
+  }
   const fence = updateGeofence(req.params.id, req.body);
-  if (!fence) { res.status(404).json({ error: 'Geofence not found' }); return; }
   res.json(fence);
 });
 
 router.delete('/geofences/:id', (req: Request, res: Response) => {
-  const deleted = deleteGeofence(req.params.id);
-  if (!deleted) { res.status(404).json({ error: 'Geofence not found' }); return; }
+  if (!getGeofenceWithOwnerCheck(req.params.id, req.authUserId!)) {
+    res.status(404).json({ error: 'Geofence not found' }); return;
+  }
+  deleteGeofence(req.params.id);
   res.json({ status: 'deleted' });
 });
 

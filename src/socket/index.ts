@@ -6,9 +6,10 @@ import { getLatestPositions, getAllDevices, getHistory } from '../services/store
 import { getSupabase } from '../services/supabase';
 import { getAllHealth } from '../services/source-health';
 import { getActiveCapAlerts } from '../services/cap';
-import { getAllGeofences } from '../services/geofence';
+import { getGeofencesByUser } from '../services/geofence';
 
 let io: SocketServer | null = null;
+const userSockets = new Map<string, Set<string>>();
 
 export function initSocket(server: HttpServer): SocketServer {
   io = new SocketServer(server, {
@@ -20,6 +21,7 @@ export function initSocket(server: HttpServer): SocketServer {
     if (!token) { next(new Error('Unauthorized')); return; }
     const { data: { user }, error } = await getSupabase().auth.getUser(token);
     if (error || !user) { next(new Error('Unauthorized')); return; }
+    socket.data.userId = user.id;
     next();
   });
 
@@ -34,20 +36,34 @@ export function initSocket(server: HttpServer): SocketServer {
     socket.emit('history:snapshot', historySnap);
     socket.emit('sources:health', getAllHealth());
     socket.emit('cap:alerts', getActiveCapAlerts());
-    socket.emit('geofences:snapshot', getAllGeofences());
   }
 
   io.on('connection', socket => {
+    const userId = socket.data.userId as string;
     console.log('[socket] Client connected:', socket.id);
+
+    // Register in user→socket map
+    if (!userSockets.has(userId)) userSockets.set(userId, new Set());
+    userSockets.get(userId)!.add(socket.id);
 
     // Send current state to new client immediately
     sendSnapshots(socket);
+    // Geofences are per-user — send only the user's fences
+    socket.emit('geofences:snapshot', getGeofencesByUser(userId));
 
     // Allow clients to re-request snapshots (e.g. after navigating back to the map)
-    socket.on('snapshots:request', () => sendSnapshots(socket));
+    socket.on('snapshots:request', () => {
+      sendSnapshots(socket);
+      socket.emit('geofences:snapshot', getGeofencesByUser(userId));
+    });
 
     socket.on('disconnect', () => {
       console.log('[socket] Client disconnected:', socket.id);
+      const sockets = userSockets.get(userId);
+      if (sockets) {
+        sockets.delete(socket.id);
+        if (sockets.size === 0) userSockets.delete(userId);
+      }
     });
   });
 
@@ -56,6 +72,14 @@ export function initSocket(server: HttpServer): SocketServer {
 
 export function broadcast(event: string, data: unknown): void {
   io?.emit(event, data);
+}
+
+export function emitToUser(userId: string, event: string, data: unknown): void {
+  const socketIds = userSockets.get(userId);
+  if (!socketIds || !io) return;
+  for (const sid of socketIds) {
+    io.to(sid).emit(event, data);
+  }
 }
 
 export function broadcastPosition(pos: Position): void {
