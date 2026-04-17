@@ -189,9 +189,9 @@ Polls the APRS.fi HTTP API at a configurable interval for a fixed list of callsi
 Positions arrive via `POST /api/gps` pushed by the **DMR-parser** bridge service (`DMR-parser/` in the repo root). The bridge reads DSD+ output (which decodes DMR digital audio from an HD1 radio connected via audio cable), extracts DMR-ID + GPS coordinates, resolves the callsign via RadioID.net, and posts only when GPS data is present. The `source` field on these positions is `"dmr"`.
 
 ### Relay (`relay`)
-Positions arrive via `POST /api/relay` from the `lora-relay` receiver service. This is used in split deployments where the repeater site and command center are connected via an internet-independent link (LoRa, point-to-point WiFi, TCP). Relay positions are stored directly — they are not forwarded to APRS-IS.
+Positions arrive via `POST /api/relay` from the `lora-relay` receiver service. This is used in split deployments where the repeater site and command center are connected via an internet-independent link (LoRa 868 MHz, TCP). Relay positions are stored directly — they are not forwarded to APRS-IS.
 
-When `RELAY_WEBHOOK_URL` is configured, the backend POSTs each new position (fire-and-forget) to the relay sender's webhook endpoint, feeding the outbound sync pipeline.
+When `RELAY_WEBHOOK_URL` is configured, the backend POSTs each new position (fire-and-forget) to the relay sender's webhook endpoint, feeding the outbound sync pipeline. This enables offline position tracking when internet is unavailable — critical for Civil Protection and disaster response scenarios.
 
 ### Fixed Stations
 Statically defined in `src/services/fixed-stations.ts`. Always active regardless of `DATA_SOURCES`. Rebroadcast every 30 seconds. Used for known fixed infrastructure (repeaters, club stations).
