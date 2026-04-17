@@ -28,7 +28,11 @@ const app = express();
 app.use(cors({ origin: config.corsOrigins }));
 app.use(express.json({ limit: '5mb' }));
 // Serve avatar images from same base dir as SQLite (persistent volume in production)
-app.use('/avatars', express.static(path.join(path.dirname(config.sqlite.path), 'avatars')));
+app.use('/avatars', express.static(path.join(path.dirname(config.sqlite.path), 'avatars'), {
+  maxAge: 0,
+  etag: true,
+  lastModified: true,
+}));
 // POST /api/gps, /api/relay, /api/federation/receive use API key auth; all other /api routes require JWT
 app.use('/api', (req, res, next) => {
   if (req.method === 'POST' && (req.path === '/gps' || req.path === '/relay' || req.path === '/federation/receive')) return next();
