@@ -11,7 +11,7 @@ import { config } from '../config';
 import { DataSource, Position } from '../types';
 import { forwardToAprsis } from '../services/aprs-forwarder';
 import { broadcastPosition } from '../socket/index';
-import { getAllHealth } from '../services/source-health';
+import { getAllHealth, recordPollSuccess } from '../services/source-health';
 import { getJournalStats } from '../services/supabase-journal';
 import { startSource, stopSource, getRunning, isRunning, isAccepting } from '../services/source-manager';
 import { getGeofencesByUser, getGeofenceWithOwnerCheck, createGeofence, updateGeofence, deleteGeofence } from '../services/geofence';
@@ -172,6 +172,7 @@ router.post('/gps', requireApiKey, (req: Request, res: Response) => {
   };
 
   forwardToAprsis(position);
+  recordPollSuccess('dmr');
 
   // 202 Accepted — position is in-flight to APRS-IS, not yet in the store
   res.status(202).json({ status: 'forwarded', callsign: position.callsign });
