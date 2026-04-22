@@ -1,6 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import {
-  addPosition,
   getAllDevices,
   getDevice,
   getLatestPositions,
@@ -10,10 +9,10 @@ import {
 import { config } from '../config';
 import { DataSource, Position } from '../types';
 import { forwardToAprsis } from '../services/aprs-forwarder';
-import { broadcastPosition } from '../socket/index';
-import { getAllHealth, recordPollSuccess } from '../services/source-health';
+import { getAllHealth } from '../services/source-health';
+import { ingestPosition } from '../services/ingest';
 import { getJournalStats } from '../services/supabase-journal';
-import { startSource, stopSource, getRunning, isRunning, isAccepting } from '../services/source-manager';
+import { startSource, stopSource, getRunning, isRunning } from '../services/source-manager';
 import { getGeofencesByUser, getGeofenceWithOwnerCheck, createGeofence, updateGeofence, deleteGeofence } from '../services/geofence';
 import { getActiveCapAlerts } from '../services/cap';
 import { positionsToCot } from '../utils/cot';
@@ -141,9 +140,8 @@ router.get('/positions/:radioId/history', async (req: Request, res: Response) =>
 });
 
 // Manual GPS push (DMR bridge / DSD+) — requires X-Api-Key if GPS_API_KEY is set.
-// Position is NOT stored directly: it is forwarded to APRS-IS and will arrive
-// back through the aprsis.ts listener, which is the canonical store path.
-router.post('/gps', requireApiKey, (req: Request, res: Response) => {
+// Positions are stored directly in the database and broadcast via Socket.io.
+router.post('/gps', requireApiKey, async (req: Request, res: Response) => {
   if (!isRunning('dmr')) {
     res.status(503).json({ error: 'DMR source is disabled' });
     return;
@@ -171,11 +169,19 @@ router.post('/gps', requireApiKey, (req: Request, res: Response) => {
     source:      'dmr',
   };
 
-  forwardToAprsis(position);
-  recordPollSuccess('dmr');
+  await ingestPosition(position);
+  res.json({ status: 'ok', callsign: position.callsign });
+});
 
-  // 202 Accepted — position is in-flight to APRS-IS, not yet in the store
-  res.status(202).json({ status: 'forwarded', callsign: position.callsign });
+// Forward a device's latest position to APRS-IS on demand.
+router.post('/positions/:radioId/forward', (req: Request, res: Response) => {
+  const device = getDevice(req.params.radioId);
+  if (!device) {
+    res.status(404).json({ error: 'Device not found' });
+    return;
+  }
+  forwardToAprsis(device.lastPosition);
+  res.json({ status: 'forwarded', callsign: device.lastPosition.callsign });
 });
 
 // Relay ingest — accepts batched positions from lora-relay receiver.
@@ -204,11 +210,8 @@ router.post('/relay', requireApiKey, async (req: Request, res: Response) => {
       source:      body.source ?? 'relay',
     };
 
-    const stored = await addPosition(pos);
-    if (stored) {
-      broadcastPosition(pos);
-      accepted++;
-    }
+    const stored = await ingestPosition(pos);
+    if (stored) accepted++;
   }
 
   res.json({ status: 'ok', accepted, total: positions.length });

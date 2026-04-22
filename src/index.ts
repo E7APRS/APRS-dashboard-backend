@@ -8,22 +8,20 @@ import { Position } from './types';
 import apiRouter from './api/router';
 import authRouter from './api/auth-router';
 import { requireAuth } from './middleware/requireAuth';
-import { initSocket, broadcast, broadcastPosition } from './socket/index';
-import { addPosition, getAllDevices, warmCache } from './services/store';
+import { initSocket, broadcast } from './socket/index';
+import { getAllDevices, warmCache } from './services/store';
 import { initDatabase } from './services/database';
-import { setPositionHandler, startSource, getRunning, isRunning } from './services/source-manager';
+import { setPositionHandler, startSource, getRunning } from './services/source-manager';
 import { startJournalReplay } from './services/supabase-journal';
 import {
-  recordPosition,
   startHealthMonitor,
   setHealthChangeCallback,
   getAllHealth,
 } from './services/source-health';
 import { startSync } from './services/sync';
-import { checkGeofences } from './services/geofence';
 import { startCapPoller } from './services/cap';
-import { startTakBridge, sendToTak } from './services/tak-bridge';
-import { federatePosition, receiveFederatedPosition } from './services/federation';
+import { startTakBridge } from './services/tak-bridge';
+import { ingestPosition } from './services/ingest';
 
 const app = express();
 app.use(cors({ origin: config.corsOrigins }));
@@ -235,24 +233,7 @@ const server = http.createServer(app);
 initSocket(server);
 
 async function handlePosition(pos: Position): Promise<void> {
-  const accepted = await addPosition(pos);
-  if (accepted) {
-    recordPosition(pos.source);
-    broadcastPosition(pos);
-    checkGeofences(pos);
-    sendToTak(pos);
-    federatePosition(pos);
-
-    // Notify lora-relay sender if configured (fire-and-forget, non-blocking)
-    if (config.relayWebhookUrl) {
-      fetch(config.relayWebhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pos),
-        signal: AbortSignal.timeout(2000),
-      }).catch(() => {});
-    }
-  }
+  await ingestPosition(pos);
 }
 
 async function boot(): Promise<void> {
