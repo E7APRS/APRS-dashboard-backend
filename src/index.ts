@@ -122,16 +122,21 @@ app.get('/', (_req, res) => {
     return `${h}h ${m % 60}m ago`;
   }
 
-  const sourceRows = health.length > 0
-    ? health.map(h => `
+  const ALL_SOURCES = ['aprsfi', 'aprsis', 'meshtastic', 'mqtt', 'dmr', 'simulator', 'relay'] as const;
+  const healthBySource = new Map(health.map(h => [h.source, h]));
+
+  const sourceRows = ALL_SOURCES.map(source => {
+    const h = healthBySource.get(source);
+    const status = h?.status ?? 'disabled';
+    return `
         <tr>
-          <td><strong>${escapeHtml(h.source)}</strong></td>
-          <td>${statusBadge(h.status)}</td>
-          <td>${timeAgo(h.lastPositionAt)}</td>
-          <td>${h.positionsTotal.toLocaleString()}</td>
-          <td>${h.lastError ? `<span class="err">${escapeHtml(h.lastError)}</span>` : '—'}</td>
-        </tr>`).join('')
-    : '<tr><td colspan="5" class="muted">No sources tracked yet</td></tr>';
+          <td><strong>${escapeHtml(source)}</strong></td>
+          <td>${statusBadge(status)}</td>
+          <td>${h ? timeAgo(h.lastPositionAt) : '—'}</td>
+          <td>${h ? h.positionsTotal.toLocaleString() : '0'}</td>
+          <td>${h?.lastError ? `<span class="err">${escapeHtml(h.lastError)}</span>` : '—'}</td>
+        </tr>`;
+  }).join('');
 
   const deviceRows = devices.slice(0, 20).map(d => {
     const age = Date.now() - new Date(d.lastSeen).getTime();
