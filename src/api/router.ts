@@ -13,7 +13,7 @@ import { forwardToAprsis } from '../services/aprs-forwarder';
 import { broadcastPosition } from '../socket/index';
 import { getAllHealth } from '../services/source-health';
 import { getJournalStats } from '../services/supabase-journal';
-import { startSource, stopSource, getRunning, isRunning } from '../services/source-manager';
+import { startSource, stopSource, getRunning, isRunning, isAccepting } from '../services/source-manager';
 import { getGeofencesByUser, getGeofenceWithOwnerCheck, createGeofence, updateGeofence, deleteGeofence } from '../services/geofence';
 import { getActiveCapAlerts } from '../services/cap';
 import { positionsToCot } from '../utils/cot';
@@ -59,7 +59,7 @@ router.get('/sources/health', (_req: Request, res: Response) => {
 });
 
 // Runtime source management
-const TOGGLEABLE_SOURCES: DataSource[] = ['aprsfi', 'aprsis', 'simulator', 'meshtastic', 'mqtt'];
+const TOGGLEABLE_SOURCES: DataSource[] = ['aprsfi', 'aprsis', 'simulator', 'meshtastic', 'mqtt', 'dmr'];
 
 router.get('/sources', (_req: Request, res: Response) => {
   res.json({
@@ -144,6 +144,11 @@ router.get('/positions/:radioId/history', async (req: Request, res: Response) =>
 // Position is NOT stored directly: it is forwarded to APRS-IS and will arrive
 // back through the aprsis.ts listener, which is the canonical store path.
 router.post('/gps', requireApiKey, (req: Request, res: Response) => {
+  if (!isRunning('dmr')) {
+    res.status(503).json({ error: 'DMR source is disabled' });
+    return;
+  }
+
   const body = req.body as Partial<Position>;
 
   if (!body.radioId || !body.callsign || body.lat === undefined || body.lon === undefined) {

@@ -22,6 +22,9 @@ const factories: Partial<Record<DataSource, SourceFactory>> = {
 };
 
 const running = new Map<DataSource, StopFn>();
+// Push-based sources (DMR, relay) have no factory — they receive data via HTTP.
+// This set tracks which push-based sources are currently accepting data.
+const passiveEnabled = new Set<DataSource>();
 let positionHandler: ((pos: Position) => void) | null = null;
 
 /** Set the global position handler (called once at boot). */
@@ -31,12 +34,18 @@ export function setPositionHandler(handler: (pos: Position) => void): void {
 
 /** Start a source if it has a factory and is not already running. */
 export function startSource(source: DataSource): boolean {
-  if (running.has(source)) return false; // already running
-  const factory = factories[source];
-  if (!factory || !positionHandler) return false;
+  if (running.has(source) || passiveEnabled.has(source)) return false;
 
-  const stop = factory(positionHandler);
-  running.set(source, stop);
+  const factory = factories[source];
+  if (factory) {
+    if (!positionHandler) return false;
+    const stop = factory(positionHandler);
+    running.set(source, stop);
+  } else {
+    // Push-based source — just mark as accepting
+    passiveEnabled.add(source);
+  }
+
   markSourceEnabled(source);
   console.log(`[source-manager] Started: ${source}`);
   return true;
@@ -45,21 +54,31 @@ export function startSource(source: DataSource): boolean {
 /** Stop a running source. */
 export function stopSource(source: DataSource): boolean {
   const stop = running.get(source);
-  if (!stop) return false;
+  if (stop) {
+    stop();
+    running.delete(source);
+  } else if (passiveEnabled.has(source)) {
+    passiveEnabled.delete(source);
+  } else {
+    return false;
+  }
 
-  stop();
-  running.delete(source);
   markSourceDisabled(source);
   console.log(`[source-manager] Stopped: ${source}`);
   return true;
 }
 
-/** Get list of currently running sources. */
+/** Get list of currently running sources (active + passive). */
 export function getRunning(): DataSource[] {
-  return Array.from(running.keys());
+  return [...running.keys(), ...passiveEnabled];
 }
 
-/** Check if a source is running. */
+/** Check if a source is running (active or passive). */
 export function isRunning(source: DataSource): boolean {
-  return running.has(source);
+  return running.has(source) || passiveEnabled.has(source);
+}
+
+/** Check if a push-based source is accepting data. */
+export function isAccepting(source: DataSource): boolean {
+  return passiveEnabled.has(source);
 }

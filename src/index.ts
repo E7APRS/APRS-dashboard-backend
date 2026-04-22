@@ -155,6 +155,9 @@ async function boot(): Promise<void> {
     startSource(source);
   }
 
+  // Enable push-based sources by default (they accept data via HTTP, no active connection)
+  startSource('dmr');
+
   // Start CAP alert poller (independent of data sources)
   startCapPoller();
 
