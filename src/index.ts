@@ -11,12 +11,13 @@ import { requireAuth } from './middleware/requireAuth';
 import { initSocket, broadcast, broadcastPosition } from './socket/index';
 import { addPosition, getAllDevices, warmCache } from './services/store';
 import { initDatabase } from './services/database';
-import { setPositionHandler, startSource, getRunning } from './services/source-manager';
+import { setPositionHandler, startSource, getRunning, isRunning } from './services/source-manager';
 import { startJournalReplay } from './services/supabase-journal';
 import {
   recordPosition,
   startHealthMonitor,
   setHealthChangeCallback,
+  getAllHealth,
 } from './services/source-health';
 import { startSync } from './services/sync';
 import { checkGeofences } from './services/geofence';
@@ -63,6 +64,9 @@ function getLastPacketInfo(): { iso: string | null; ageSeconds: number | null } 
 
 app.get('/', (_req, res) => {
   const lastPacket = getLastPacketInfo();
+  const running = getRunning();
+  const health = getAllHealth();
+  const devices = getAllDevices();
   const payload = {
     status: 'ok',
     service: 'aprs-tracker',
@@ -70,7 +74,10 @@ app.get('/', (_req, res) => {
     uptimeSeconds: Math.floor(process.uptime()),
     lastPacketReceived: lastPacket.iso,
     lastPacketAgeSeconds: lastPacket.ageSeconds,
-    activeSources: config.dataSources,
+    runningSources: running,
+    configuredSources: config.dataSources,
+    sourceHealth: health,
+    deviceCount: devices.length,
     apiStatusEndpoint: '/api/status',
   };
 
@@ -79,36 +86,141 @@ app.get('/', (_req, res) => {
     return;
   }
 
-  const sources = payload.activeSources.length > 0
-    ? payload.activeSources.map(source => `<li>${escapeHtml(source)}</li>`).join('')
-    : '<li>none</li>';
+  function formatUptime(seconds: number): string {
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    const parts: string[] = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0) parts.push(`${h}h`);
+    if (m > 0) parts.push(`${m}m`);
+    parts.push(`${s}s`);
+    return parts.join(' ');
+  }
+
+  function statusBadge(status: string): string {
+    const colors: Record<string, string> = {
+      up:       'background:#c6f6d5;color:#22543d',
+      degraded: 'background:#fefcbf;color:#744210',
+      down:     'background:#fed7d7;color:#822727',
+      disabled: 'background:#e2e8f0;color:#718096',
+    };
+    const style = colors[status] ?? colors.disabled;
+    return `<span class="badge" style="${style}">${escapeHtml(status.toUpperCase())}</span>`;
+  }
+
+  function timeAgo(iso: string | null): string {
+    if (!iso) return 'never';
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 1000) return 'just now';
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ${s % 60}s ago`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m ago`;
+  }
+
+  const sourceRows = health.length > 0
+    ? health.map(h => `
+        <tr>
+          <td><strong>${escapeHtml(h.source)}</strong></td>
+          <td>${statusBadge(h.status)}</td>
+          <td>${timeAgo(h.lastPositionAt)}</td>
+          <td>${h.positionsTotal.toLocaleString()}</td>
+          <td>${h.lastError ? `<span class="err">${escapeHtml(h.lastError)}</span>` : '—'}</td>
+        </tr>`).join('')
+    : '<tr><td colspan="5" class="muted">No sources tracked yet</td></tr>';
+
+  const deviceRows = devices.slice(0, 20).map(d => {
+    const age = Date.now() - new Date(d.lastSeen).getTime();
+    const stale = age > 600_000;
+    return `
+      <tr${stale ? ' class="stale"' : ''}>
+        <td><strong>${escapeHtml(d.callsign)}</strong></td>
+        <td><code>${escapeHtml(d.radioId)}</code></td>
+        <td>${escapeHtml(d.lastPosition?.source ?? '—')}</td>
+        <td>${timeAgo(d.lastSeen)}</td>
+      </tr>`;
+  }).join('');
 
   res.type('html').send(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>APRS Backend Health</title>
+    <title>E7APRS Backend — Health</title>
+    <meta http-equiv="refresh" content="15" />
     <style>
-      body { font-family: Arial, sans-serif; margin: 2rem; background: #f7fafc; color: #1a202c; }
-      .card { max-width: 720px; background: #fff; padding: 1.5rem; border-radius: 10px; box-shadow: 0 1px 6px rgba(0,0,0,.08); }
-      .ok { color: #2f855a; font-weight: 700; }
-      code { background: #edf2f7; padding: 0.15rem 0.35rem; border-radius: 4px; }
-      ul { margin-top: 0.35rem; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e2e8f0; padding: 1.5rem; }
+      .container { max-width: 900px; margin: 0 auto; }
+      .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid #2d3748; }
+      .header h1 { font-size: 1.4rem; color: #ff6600; font-weight: 700; }
+      .header .status-pill { font-size: 0.75rem; padding: 0.2rem 0.6rem; border-radius: 999px; background: #c6f6d5; color: #22543d; font-weight: 600; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+      .stat { background: #1a1f2e; border: 1px solid #2d3748; border-radius: 8px; padding: 1rem; }
+      .stat .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #718096; margin-bottom: 0.25rem; }
+      .stat .value { font-size: 1.3rem; font-weight: 700; color: #f7fafc; }
+      .stat .value.orange { color: #ff6600; }
+      .card { background: #1a1f2e; border: 1px solid #2d3748; border-radius: 8px; margin-bottom: 1rem; overflow: hidden; }
+      .card-title { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #a0aec0; padding: 0.75rem 1rem; border-bottom: 1px solid #2d3748; }
+      table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+      th { text-align: left; padding: 0.5rem 1rem; color: #718096; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #2d3748; }
+      td { padding: 0.5rem 1rem; border-bottom: 1px solid #2d374833; color: #cbd5e0; }
+      tr:last-child td { border-bottom: none; }
+      tr.stale td { opacity: 0.5; }
+      .badge { display: inline-block; font-size: 0.65rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 4px; letter-spacing: 0.03em; }
+      .err { color: #fc8181; font-size: 0.8rem; }
+      .muted { color: #4a5568; font-style: italic; text-align: center; padding: 1rem; }
+      code { background: #2d3748; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.8rem; color: #e2e8f0; }
+      .footer { text-align: center; font-size: 0.7rem; color: #4a5568; margin-top: 1.5rem; }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h1>APRS Backend</h1>
-      <p>Status: <span class="ok">${escapeHtml(payload.status.toUpperCase())}</span></p>
-      <p>Service: <code>${escapeHtml(payload.service)}</code></p>
-      <p>Server time: <code>${escapeHtml(payload.now)}</code></p>
-      <p>Uptime: <code>${payload.uptimeSeconds}s</code></p>
-      <p>Last packet received: <code>${payload.lastPacketReceived ? escapeHtml(payload.lastPacketReceived) : 'none yet'}</code></p>
-      <p>Last packet age: <code>${payload.lastPacketAgeSeconds !== null ? `${payload.lastPacketAgeSeconds}s` : 'n/a'}</code></p>
-      <p>Active sources:</p>
-      <ul>${sources}</ul>
-      <p>API status endpoint: <code>${escapeHtml(payload.apiStatusEndpoint)}</code></p>
+    <div class="container">
+      <div class="header">
+        <h1>E7APRS Backend</h1>
+        <span class="status-pill">HEALTHY</span>
+      </div>
+
+      <div class="grid">
+        <div class="stat">
+          <div class="label">Uptime</div>
+          <div class="value">${formatUptime(payload.uptimeSeconds)}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Devices</div>
+          <div class="value orange">${payload.deviceCount}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Active Sources</div>
+          <div class="value orange">${running.length}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Last Packet</div>
+          <div class="value" style="font-size:1rem">${payload.lastPacketAgeSeconds !== null ? `${payload.lastPacketAgeSeconds}s ago` : 'n/a'}</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Source Health</div>
+        <table>
+          <thead><tr><th>Source</th><th>Status</th><th>Last Position</th><th>Total</th><th>Error</th></tr></thead>
+          <tbody>${sourceRows}</tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Devices (${devices.length}${devices.length > 20 ? ', showing 20' : ''})</div>
+        <table>
+          <thead><tr><th>Callsign</th><th>Radio ID</th><th>Source</th><th>Last Seen</th></tr></thead>
+          <tbody>${deviceRows.length > 0 ? deviceRows : '<tr><td colspan="4" class="muted">No devices tracked yet</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      <div class="footer">Auto-refreshes every 15s &middot; <code>${escapeHtml(payload.now)}</code></div>
     </div>
   </body>
 </html>`);
