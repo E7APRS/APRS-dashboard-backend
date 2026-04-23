@@ -80,6 +80,15 @@ export function recordPosition(source: DataSource): void {
   if (prev !== 'up') notifyChange();
 }
 
+/** Record a successful poll (source is reachable, even if no new positions). */
+export function recordPollSuccess(source: DataSource): void {
+  const h = getOrCreate(source);
+  const prev = h.status;
+  // Source is reachable — mark as up (or keep up)
+  h.status = 'up';
+  if (prev !== 'up') notifyChange();
+}
+
 /** Record an error from a source. */
 export function recordError(source: DataSource, message: string): void {
   const h = getOrCreate(source);

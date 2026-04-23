@@ -10,7 +10,7 @@
  */
 import { Position } from '../types';
 import { config } from '../config';
-import { recordError } from './source-health';
+import { recordError, recordPollSuccess } from './source-health';
 
 const APRSFI_BASE_URL = 'https://api.aprs.fi/api/get';
 
@@ -109,6 +109,7 @@ export function startAprsfiPoller(onPosition: (pos: Position) => void): () => vo
     try {
       const positions = await fetchAprsfi(callsigns);
       failStreak = 0; // reset on success
+      recordPollSuccess('aprsfi');
       for (const pos of positions) {
         onPosition(pos);
       }
