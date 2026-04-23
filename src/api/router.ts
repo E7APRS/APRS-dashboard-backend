@@ -58,7 +58,7 @@ router.get('/sources/health', (_req: Request, res: Response) => {
 });
 
 // Runtime source management
-const TOGGLEABLE_SOURCES: DataSource[] = ['aprsfi', 'aprsis', 'simulator', 'meshtastic', 'mqtt', 'dmr'];
+const TOGGLEABLE_SOURCES: DataSource[] = ['aprsfi', 'aprsis', 'meshtastic', 'mqtt', 'dmr', 'fixed', 'relay'];
 
 router.get('/sources', (_req: Request, res: Response) => {
   res.json({

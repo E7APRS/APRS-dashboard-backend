@@ -4,7 +4,7 @@ import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import { config } from './config';
-import { Position } from './types';
+import { DataSource, Position } from './types';
 import apiRouter from './api/router';
 import authRouter from './api/auth-router';
 import { requireAuth } from './middleware/requireAuth';
@@ -120,7 +120,7 @@ app.get('/', (_req, res) => {
     return `${h}h ${m % 60}m ago`;
   }
 
-  const ALL_SOURCES = ['aprsfi', 'aprsis', 'meshtastic', 'mqtt', 'dmr', 'simulator', 'relay'] as const;
+  const ALL_SOURCES = ['aprsfi', 'aprsis', 'meshtastic', 'mqtt', 'dmr', 'fixed', 'relay'] as const;
   const healthBySource = new Map(health.map(h => [h.source, h]));
 
   const sourceRows = ALL_SOURCES.map(source => {
@@ -246,15 +246,14 @@ async function boot(): Promise<void> {
   startHealthMonitor();
   setHealthChangeCallback((health) => broadcast('sources:health', health));
 
-  // Register the position handler and start configured sources via source manager
+  // Register the position handler and start all sources
   setPositionHandler(handlePosition);
 
-  for (const source of config.dataSources) {
+  // Start all known sources — active ones connect/poll, passive ones (dmr, relay) just accept data
+  const ALL_BOOT_SOURCES: DataSource[] = ['aprsis', 'aprsfi', 'meshtastic', 'mqtt', 'fixed', 'dmr', 'relay'];
+  for (const source of ALL_BOOT_SOURCES) {
     startSource(source);
   }
-
-  // Enable push-based sources by default (they accept data via HTTP, no active connection)
-  startSource('dmr');
 
   // Start CAP alert poller (independent of data sources)
   startCapPoller();

@@ -10,6 +10,7 @@ import { startAprsfiPoller } from './aprsfi';
 import { startAprsis } from './aprsis';
 import { startMeshtastic } from './meshtastic';
 import { startMqttSource } from './mqtt-source';
+import { startFixedStations } from './fixed-stations';
 
 type StopFn = () => void;
 type SourceFactory = (onPosition: (pos: Position) => void) => StopFn;
@@ -19,6 +20,7 @@ const factories: Partial<Record<DataSource, SourceFactory>> = {
   aprsis:     (cb) => startAprsis(cb),
   meshtastic: (cb) => startMeshtastic(cb),
   mqtt:       (cb) => startMqttSource(cb),
+  fixed:      (cb) => startFixedStations(cb),
 };
 
 const running = new Map<DataSource, StopFn>();
