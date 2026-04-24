@@ -250,7 +250,7 @@ async function boot(): Promise<void> {
   setPositionHandler(handlePosition);
 
   // Start all known sources — active ones connect/poll, passive ones (dmr, relay) just accept data
-  const ALL_BOOT_SOURCES: DataSource[] = ['aprsis', 'aprsfi', 'meshtastic', 'mqtt', 'fixed', 'dmr', 'relay'];
+  const ALL_BOOT_SOURCES: DataSource[] = ['aprsis', 'aprsfi', 'meshtastic', /* 'mqtt', */ 'fixed', 'dmr', 'relay'];
   for (const source of ALL_BOOT_SOURCES) {
     startSource(source);
   }
