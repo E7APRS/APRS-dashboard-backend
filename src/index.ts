@@ -299,8 +299,9 @@ async function boot(): Promise<void> {
     console.log('[boot] No sources enabled — manual POST /api/gps only');
   }
 
-  server.listen(config.port, () => {
-    console.log(`[boot] Backend running on http://localhost:${config.port}`);
+  const host = process.env.HOST ?? '0.0.0.0';
+  server.listen(config.port, host, () => {
+    console.log(`[boot] Backend running on http://${host}:${config.port}`);
   });
 }
 
