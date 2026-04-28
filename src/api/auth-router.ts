@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { queryOne, run, uuid } from '../services/database';
-import { getSupabase } from '../services/supabase';
+import { getSupabase, isSupabaseConfigured } from '../services/supabase';
 import { config } from '../config';
 import { UserProfile } from '../types';
 
@@ -128,7 +128,13 @@ router.post('/avatar', (_req: Request, res: Response) => {
       return;
     }
 
-    const ext = match[1] === 'jpeg' ? 'jpg' : match[1];
+    const rawExt = match[1] === 'jpeg' ? 'jpg' : match[1];
+    const ALLOWED_EXTENSIONS = ['png', 'jpg', 'webp'];
+    if (!ALLOWED_EXTENSIONS.includes(rawExt)) {
+      res.status(400).json({ error: `Unsupported image type: ${rawExt}. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}` });
+      return;
+    }
+    const ext = rawExt;
     const buffer = Buffer.from(match[2], 'base64');
 
     // Max 2 MB
@@ -167,6 +173,7 @@ router.post('/avatar', (_req: Request, res: Response) => {
 
 /** Mirror profile to Supabase backup. */
 async function backupProfileToSupabase(profile: UserProfile): Promise<void> {
+  if (!isSupabaseConfigured()) return;
   try {
     const { error } = await getSupabase().from('profiles').upsert({
       id:         profile.id,

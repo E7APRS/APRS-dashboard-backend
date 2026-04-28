@@ -70,12 +70,13 @@ export function forwardToAprsis(pos: Position): void {
     setTimeout(() => {
       const packet = buildPacket(pos);
       sock.write(packet + '\r\n');
-      console.log(`[forwarder] ${pos.callsign} → APRS-IS (pass=${passcode}): ${packet.slice(0, 100)}`);
+      console.log(`[forwarder] ${pos.callsign} → APRS-IS: ${packet.slice(0, 100)}`);
       setTimeout(() => sock.destroy(), 500);
     }, 500);
   });
 
   sock.on('error', err => {
     console.error(`[forwarder] ${pos.callsign} error:`, err.message);
+    sock.destroy();
   });
 }

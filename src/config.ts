@@ -7,10 +7,10 @@ const rawSources = process.env.DATA_SOURCES ?? process.env.DATA_SOURCE ?? 'aprsi
 const activeSources = rawSources.split(',').map(s => s.trim()).filter(Boolean) as DataSource[];
 
 export const config = {
-  port: parseInt(process.env.PORT ?? '3001', 10),
+  port: parseInt(process.env.PORT ?? '7531', 10),
 
-  // Comma-separated allowed origins for CORS. Use '*' only in development.
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3000').split(',').map(s => s.trim()),
+  // Comma-separated allowed origins for CORS.
+  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:7530').split(',').map(s => s.trim()).filter(s => s !== '*'),
 
   // Shared secret required on POST /api/gps (X-Api-Key header)
   gpsApiKey: process.env.GPS_API_KEY ?? '',
@@ -53,8 +53,8 @@ export const config = {
   meshtastic: {
     brokerUrl:  process.env.MESHTASTIC_MQTT_URL ?? 'mqtt://mqtt.meshtastic.org',
     topic:      process.env.MESHTASTIC_MQTT_TOPIC ?? 'msh/EU_868/2/json/#',
-    username:   process.env.MESHTASTIC_MQTT_USER ?? 'meshdev',
-    password:   process.env.MESHTASTIC_MQTT_PASS ?? 'large4cats',
+    username:   process.env.MESHTASTIC_MQTT_USER ?? '',
+    password:   process.env.MESHTASTIC_MQTT_PASS ?? '',
   },
 
   // Generic MQTT ingestion

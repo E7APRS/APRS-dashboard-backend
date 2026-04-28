@@ -8,7 +8,7 @@
  */
 import { Position, Device } from '../types';
 import { queryAll, run } from './database';
-import { getSupabase } from './supabase';
+import { getSupabase, isSupabaseConfigured } from './supabase';
 import { appendToJournal } from './supabase-journal';
 import { latLngToCell, gridDisk } from 'h3-js';
 
@@ -150,8 +150,14 @@ export async function addPosition(pos: Position): Promise<boolean> {
   positionCache.set(pos.radioId, history);
 
   if (deviceCache.size >= MAX_DEVICES && !deviceCache.has(pos.radioId)) {
-    const oldest = deviceCache.keys().next().value;
-    if (oldest) { deviceCache.delete(oldest); positionCache.delete(oldest); }
+    // Evict device with oldest lastSeen (LRU by activity)
+    let oldestId: string | null = null;
+    let oldestTime = Infinity;
+    for (const [id, dev] of deviceCache) {
+      const t = new Date(dev.lastSeen).getTime();
+      if (t < oldestTime) { oldestTime = t; oldestId = id; }
+    }
+    if (oldestId) { deviceCache.delete(oldestId); positionCache.delete(oldestId); }
   }
 
   deviceCache.set(pos.radioId, {
@@ -199,8 +205,10 @@ export async function addPosition(pos: Position): Promise<boolean> {
   }
 
   // 3. Mirror to Supabase (backup — non-blocking, best-effort)
-  backupDeviceToSupabase(pos).catch(() => {});
-  backupPositionToSupabase(pos, isOverwrite).catch(() => {});
+  if (isSupabaseConfigured()) {
+    backupDeviceToSupabase(pos).catch(() => {});
+    backupPositionToSupabase(pos, isOverwrite).catch(() => {});
+  }
 
   return true;
 }
@@ -265,6 +273,8 @@ export async function getHistoryFromDb(radioId: string, limit = 500): Promise<Po
   }
 
   // Fallback to Supabase
+  if (!isSupabaseConfigured()) return [];
+
   const { data, error } = await getSupabase()
     .from('positions')
     .select('*')
@@ -310,12 +320,24 @@ export function getDevicesInRadius(lat: number, lon: number, radiusKm: number): 
     cells,
   );
 
-  // Deduplicate: keep latest position per radio_id
+  // Deduplicate: keep latest position per radio_id, filter by actual distance
   const seen = new Set<string>();
   const result: Position[] = [];
+  const radiusM = radiusKm * 1000;
   for (const row of rows) {
     const radioId = row.radio_id as string;
     if (seen.has(radioId)) continue;
+    // Haversine distance check
+    const posLat = row.lat as number;
+    const posLon = row.lon as number;
+    const R = 6_371_000; // earth radius in meters
+    const dLat = (posLat - lat) * Math.PI / 180;
+    const dLon = (posLon - lon) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+              Math.cos(lat * Math.PI / 180) * Math.cos(posLat * Math.PI / 180) *
+              Math.sin(dLon / 2) ** 2;
+    const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    if (dist > radiusM) continue;
     seen.add(radioId);
     result.push(rowToPosition(row));
   }
@@ -338,6 +360,8 @@ export async function getHistoryRange(start: string, end: string): Promise<Posit
   } catch (err) {
     console.warn('[store] SQLite history range read failed, falling back to Supabase:', (err as Error).message);
   }
+
+  if (!isSupabaseConfigured()) return [];
 
   const { data, error } = await getSupabase()
     .from('positions')
@@ -460,7 +484,9 @@ export async function warmCache(): Promise<void> {
   let supabaseDevices = 0;
   let supabasePositions = 0;
 
-  try {
+  if (!isSupabaseConfigured()) {
+    console.log('[store] Supabase not configured — skipping backup merge');
+  } else try {
     const sb = getSupabase();
     const { data: devices, error: devErr } = await sb.from('devices').select('*');
 

@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
 import {
   getAllDevices,
   getDevice,
@@ -19,9 +20,17 @@ import { positionsToCot } from '../utils/cot';
 import { receiveFederatedPosition } from '../services/federation';
 
 // Middleware: require X-Api-Key header matching GPS_API_KEY env var.
-// Skipped if GPS_API_KEY is not configured (development convenience).
+// In production (NODE_ENV=production), GPS_API_KEY is mandatory.
+// In development, requests pass through unauthenticated if the key is unset.
 function requireApiKey(req: Request, res: Response, next: NextFunction): void {
-  if (!config.gpsApiKey) { next(); return; }
+  if (!config.gpsApiKey) {
+    if (process.env.NODE_ENV === 'production') {
+      res.status(503).json({ error: 'GPS_API_KEY not configured — server misconfigured' });
+      return;
+    }
+    next();
+    return;
+  }
   const key = req.headers['x-api-key'];
   if (key !== config.gpsApiKey) {
     res.status(401).json({ error: 'Unauthorized' });
@@ -29,6 +38,54 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
   }
   next();
 }
+
+/** Validate a position payload. Returns an error string or null if valid. */
+function validatePosition(body: Record<string, unknown>): string | null {
+  if (!body.radioId || typeof body.radioId !== 'string') return 'Missing or invalid radioId';
+  if (!body.callsign || typeof body.callsign !== 'string') return 'Missing or invalid callsign';
+  if (typeof body.lat !== 'number' || !Number.isFinite(body.lat)) return 'lat must be a finite number';
+  if (typeof body.lon !== 'number' || !Number.isFinite(body.lon)) return 'lon must be a finite number';
+  if (body.lat < -90 || body.lat > 90) return 'lat must be between -90 and 90';
+  if (body.lon < -180 || body.lon > 180) return 'lon must be between -180 and 180';
+  if (body.altitude !== undefined && (typeof body.altitude !== 'number' || !Number.isFinite(body.altitude))) return 'altitude must be a finite number';
+  if (body.speed !== undefined && (typeof body.speed !== 'number' || !Number.isFinite(body.speed) || body.speed < 0)) return 'speed must be a non-negative finite number';
+  if (body.course !== undefined && (typeof body.course !== 'number' || !Number.isFinite(body.course))) return 'course must be a finite number';
+  if (body.radioId.length > 20) return 'radioId exceeds maximum length';
+  if (body.callsign.length > 20) return 'callsign exceeds maximum length';
+  if (body.comment !== undefined && (typeof body.comment !== 'string' || body.comment.length > 256)) return 'comment must be a string of max 256 chars';
+  if (body.symbol !== undefined && (typeof body.symbol !== 'string' || body.symbol.length > 2)) return 'symbol must be a 1-2 char string';
+  if (body.symbolTable !== undefined && (typeof body.symbolTable !== 'string' || body.symbolTable.length > 2)) return 'symbolTable must be a 1-2 char string';
+  if (body.timestamp !== undefined && typeof body.timestamp === 'string' && isNaN(Date.parse(body.timestamp))) return 'timestamp must be a valid ISO 8601 string';
+  return null;
+}
+
+// Rate limiter for position ingestion endpoints (POST /gps, /relay, /federation/receive).
+// 100 requests per minute per IP — enough for normal operation, blocks flooding.
+const ingestLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' },
+});
+
+// General rate limiter for authenticated read endpoints
+const apiLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' },
+});
+
+// Stricter limiter for admin-level source management
+const adminLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
 
 const router = Router();
 
@@ -68,7 +125,7 @@ router.get('/sources', (_req: Request, res: Response) => {
   });
 });
 
-router.post('/sources/:source/start', (req: Request, res: Response) => {
+router.post('/sources/:source/start', adminLimiter, (req: Request, res: Response) => {
   const source = req.params.source as DataSource;
   if (!TOGGLEABLE_SOURCES.includes(source)) {
     res.status(400).json({ error: `Unknown or non-toggleable source: ${source}` });
@@ -82,7 +139,7 @@ router.post('/sources/:source/start', (req: Request, res: Response) => {
   res.json({ status: started ? 'started' : 'failed', source });
 });
 
-router.post('/sources/:source/stop', (req: Request, res: Response) => {
+router.post('/sources/:source/stop', adminLimiter, (req: Request, res: Response) => {
   const source = req.params.source as DataSource;
   if (!TOGGLEABLE_SOURCES.includes(source)) {
     res.status(400).json({ error: `Unknown or non-toggleable source: ${source}` });
@@ -118,7 +175,7 @@ router.get('/positions/latest', (_req: Request, res: Response) => {
 
 // Historical positions for all devices within a time window
 // MUST be before :radioId route — otherwise Express matches 'history' as a radioId
-router.get('/positions/history', async (req: Request, res: Response) => {
+router.get('/positions/history', apiLimiter, async (req: Request, res: Response) => {
   const start = req.query.start as string | undefined;
   const end   = req.query.end as string | undefined;
 
@@ -141,31 +198,32 @@ router.get('/positions/:radioId/history', async (req: Request, res: Response) =>
 
 // Manual GPS push (DMR bridge / DSD+) — requires X-Api-Key if GPS_API_KEY is set.
 // Positions are stored directly in the database and broadcast via Socket.io.
-router.post('/gps', requireApiKey, async (req: Request, res: Response) => {
+router.post('/gps', ingestLimiter, requireApiKey, async (req: Request, res: Response) => {
   if (!isRunning('dmr')) {
     res.status(503).json({ error: 'DMR source is disabled' });
     return;
   }
 
-  const body = req.body as Partial<Position>;
+  const body = req.body as Record<string, unknown>;
 
-  if (!body.radioId || !body.callsign || body.lat === undefined || body.lon === undefined) {
-    res.status(400).json({ error: 'Missing required fields: radioId, callsign, lat, lon' });
+  const error = validatePosition(body);
+  if (error) {
+    res.status(400).json({ error });
     return;
   }
 
   const position: Position = {
-    radioId:     body.radioId,
-    callsign:    body.callsign,
-    lat:         body.lat,
-    lon:         body.lon,
-    altitude:    body.altitude,
-    speed:       body.speed,
-    course:      body.course,
-    comment:     config.dmrComment || body.comment,
-    symbol:      body.symbol,
-    symbolTable: body.symbolTable,
-    timestamp:   body.timestamp ?? new Date().toISOString(),
+    radioId:     body.radioId as string,
+    callsign:    body.callsign as string,
+    lat:         body.lat as number,
+    lon:         body.lon as number,
+    altitude:    body.altitude as number | undefined,
+    speed:       body.speed as number | undefined,
+    course:      body.course as number | undefined,
+    comment:     config.dmrComment || (body.comment as string | undefined),
+    symbol:      body.symbol as string | undefined,
+    symbolTable: body.symbolTable as string | undefined,
+    timestamp:   (body.timestamp as string) ?? new Date().toISOString(),
     source:      'dmr',
   };
 
@@ -174,7 +232,7 @@ router.post('/gps', requireApiKey, async (req: Request, res: Response) => {
 });
 
 // Forward a device's latest position to APRS-IS on demand.
-router.post('/positions/:radioId/forward', (req: Request, res: Response) => {
+router.post('/positions/:radioId/forward', adminLimiter, (req: Request, res: Response) => {
   const device = getDevice(req.params.radioId);
   if (!device) {
     res.status(404).json({ error: 'Device not found' });
@@ -186,12 +244,14 @@ router.post('/positions/:radioId/forward', (req: Request, res: Response) => {
 
 // Relay ingest — accepts batched positions from lora-relay receiver.
 // Writes directly to store + broadcasts via Socket.io (no APRS-IS forward).
-router.post('/relay', requireApiKey, async (req: Request, res: Response) => {
-  const positions = Array.isArray(req.body) ? req.body : [req.body];
+router.post('/relay', ingestLimiter, requireApiKey, async (req: Request, res: Response) => {
+  const positions = Array.isArray(req.body) ? req.body.slice(0, 200) : [req.body];
   let accepted = 0;
+  let rejected = 0;
 
   for (const body of positions) {
-    if (!body.radioId || !body.callsign || body.lat === undefined || body.lon === undefined) {
+    if (validatePosition(body)) {
+      rejected++;
       continue;
     }
 
@@ -207,38 +267,39 @@ router.post('/relay', requireApiKey, async (req: Request, res: Response) => {
       symbol:      body.symbol,
       symbolTable: body.symbolTable,
       timestamp:   body.timestamp ?? new Date().toISOString(),
-      source:      body.source ?? 'relay',
+      source:      'relay' as const,
     };
 
     const stored = await ingestPosition(pos);
     if (stored) accepted++;
   }
 
-  res.json({ status: 'ok', accepted, total: positions.length });
+  res.json({ status: 'ok', accepted, rejected, total: positions.length });
 });
 
 // ─── Federation ──────────────────────────────────────────────────────────────
 
-router.post('/federation/receive', requireApiKey, async (req: Request, res: Response) => {
-  const body = req.body as Partial<Position>;
-  if (!body.radioId || !body.callsign || body.lat === undefined || body.lon === undefined) {
-    res.status(400).json({ error: 'Invalid position data' });
+router.post('/federation/receive', ingestLimiter, requireApiKey, async (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown>;
+  const error = validatePosition(body);
+  if (error) {
+    res.status(400).json({ error });
     return;
   }
 
   const pos: Position = {
-    radioId:     body.radioId,
-    callsign:    body.callsign,
-    lat:         body.lat,
-    lon:         body.lon,
-    altitude:    body.altitude,
-    speed:       body.speed,
-    course:      body.course,
-    comment:     body.comment,
-    symbol:      body.symbol,
-    symbolTable: body.symbolTable,
-    timestamp:   body.timestamp ?? new Date().toISOString(),
-    source:      body.source ?? 'relay',
+    radioId:     body.radioId as string,
+    callsign:    body.callsign as string,
+    lat:         body.lat as number,
+    lon:         body.lon as number,
+    altitude:    body.altitude as number | undefined,
+    speed:       body.speed as number | undefined,
+    course:      body.course as number | undefined,
+    comment:     body.comment as string | undefined,
+    symbol:      body.symbol as string | undefined,
+    symbolTable: body.symbolTable as string | undefined,
+    timestamp:   (body.timestamp as string) ?? new Date().toISOString(),
+    source:      'relay' as const,
   };
 
   const accepted = await receiveFederatedPosition(pos);
@@ -277,6 +338,20 @@ router.post('/geofences', (req: Request, res: Response) => {
     res.status(400).json({ error: 'Missing required fields: name, geometry' });
     return;
   }
+  // Validate GeoJSON Polygon structure
+  if (geometry.type !== 'Polygon' || !Array.isArray(geometry.coordinates)) {
+    res.status(400).json({ error: 'geometry must be a GeoJSON Polygon with coordinates array' });
+    return;
+  }
+  const coords = geometry.coordinates;
+  if (!Array.isArray(coords[0]) || coords[0].length < 4) {
+    res.status(400).json({ error: 'Polygon must have at least 4 coordinate pairs (closed ring)' });
+    return;
+  }
+  if (coords[0].length > 1000) {
+    res.status(400).json({ error: 'Polygon ring exceeds maximum of 1000 points' });
+    return;
+  }
   const fence = createGeofence({
     name, description, geometry, color,
     createdBy: req.authUserId!,
@@ -288,6 +363,22 @@ router.post('/geofences', (req: Request, res: Response) => {
 router.put('/geofences/:id', (req: Request, res: Response) => {
   if (!getGeofenceWithOwnerCheck(req.params.id, req.authUserId!)) {
     res.status(404).json({ error: 'Geofence not found' }); return;
+  }
+  // Validate geometry if provided in the update
+  if (req.body.geometry) {
+    const geometry = req.body.geometry;
+    if (geometry.type !== 'Polygon' || !Array.isArray(geometry.coordinates)) {
+      res.status(400).json({ error: 'geometry must be a GeoJSON Polygon with coordinates array' });
+      return;
+    }
+    if (!Array.isArray(geometry.coordinates[0]) || geometry.coordinates[0].length < 4) {
+      res.status(400).json({ error: 'Polygon must have at least 4 coordinate pairs (closed ring)' });
+      return;
+    }
+    if (geometry.coordinates[0].length > 1000) {
+      res.status(400).json({ error: 'Polygon ring exceeds maximum of 1000 points' });
+      return;
+    }
   }
   const fence = updateGeofence(req.params.id, req.body);
   res.json(fence);

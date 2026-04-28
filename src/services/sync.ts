@@ -10,7 +10,7 @@
  * watermark to keep queries efficient.
  */
 import { queryAll, queryOne, run } from './database';
-import { getSupabase } from './supabase';
+import { getSupabase, isSupabaseConfigured } from './supabase';
 import { Position } from '../types';
 
 const SYNC_INTERVAL_MS = 5 * 60_000; // every 5 minutes
@@ -93,6 +93,10 @@ async function syncCycle(): Promise<void> {
 
 export function startSync(): void {
   if (syncTimer) return;
+  if (!isSupabaseConfigured()) {
+    console.log('[sync] Supabase not configured — sync disabled');
+    return;
+  }
   syncTimer = setInterval(() => {
     syncCycle().catch(err => {
       console.error('[sync] Cycle error:', (err as Error).message);

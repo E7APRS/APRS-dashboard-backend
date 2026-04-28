@@ -84,3 +84,18 @@ export function isRunning(source: DataSource): boolean {
 export function isAccepting(source: DataSource): boolean {
   return passiveEnabled.has(source);
 }
+
+/** Stop all running sources (used during graceful shutdown). */
+export function stopAllSources(): void {
+  for (const [source, stop] of running) {
+    stop();
+    markSourceDisabled(source);
+    console.log(`[source-manager] Stopped: ${source}`);
+  }
+  running.clear();
+  for (const source of passiveEnabled) {
+    markSourceDisabled(source);
+    console.log(`[source-manager] Stopped: ${source}`);
+  }
+  passiveEnabled.clear();
+}

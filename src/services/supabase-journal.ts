@@ -11,7 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
-import { getSupabase } from './supabase';
+import { getSupabase, isSupabaseConfigured } from './supabase';
 
 // Journal lives next to the SQLite database file
 const JOURNAL_PATH = path.join(path.dirname(config.sqlite.path), 'supabase-journal.ndjson');
@@ -121,7 +121,9 @@ async function replayCycle(): Promise<void> {
     if (!ok) failed.push(entry);
   }
 
-  writeJournal([...failed, ...remaining]);
+  const pending = [...failed, ...remaining];
+  writeJournal(pending);
+  cachedPendingCount = pending.length;
 
   const replayed = batch.length - failed.length;
   if (replayed > 0 || failed.length > 0) {
@@ -132,6 +134,10 @@ async function replayCycle(): Promise<void> {
 /** Start the background replay loop. */
 export function startJournalReplay(): void {
   if (replayTimer) return;
+  if (!isSupabaseConfigured()) {
+    console.log('[supabase-journal] Supabase not configured — journal replay disabled');
+    return;
+  }
   replayTimer = setInterval(() => {
     replayCycle().catch(err => {
       console.error('[supabase-journal] Replay cycle error:', (err as Error).message);
@@ -152,8 +158,10 @@ export function stopJournalReplay(): void {
   }
 }
 
-/** Get journal stats for monitoring. */
+// Cached pending count — updated after each replay cycle
+let cachedPendingCount = 0;
+
+/** Get journal stats for monitoring (uses cached count to avoid re-reading file). */
 export function getJournalStats(): { pending: number; path: string } {
-  const entries = readJournal();
-  return { pending: entries.length, path: JOURNAL_PATH };
+  return { pending: cachedPendingCount, path: JOURNAL_PATH };
 }

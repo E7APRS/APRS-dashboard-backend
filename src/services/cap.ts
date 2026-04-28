@@ -4,6 +4,7 @@
  * Polls CAP XML feeds at configured intervals, parses alert polygons and
  * metadata, and broadcasts them to connected clients.
  */
+import { XMLParser } from 'fast-xml-parser';
 import { config } from '../config';
 import { broadcast } from '../socket/index';
 
@@ -29,79 +30,86 @@ export interface CapAlert {
 let activeAlerts: CapAlert[] = [];
 let timer: ReturnType<typeof setInterval> | null = null;
 
+const xmlParser = new XMLParser({
+  ignoreAttributes: false,
+  isArray: (name) => ['alert', 'info', 'area'].includes(name),
+  removeNSPrefix: true,
+});
+
 function parseCapXml(xml: string): CapAlert[] {
   const alerts: CapAlert[] = [];
 
-  // Simple regex-based XML parsing (no external XML dep needed for CAP's flat structure)
-  const alertRegex = /<alert>([\s\S]*?)<\/alert>/gi;
-  let alertMatch;
+  try {
+    const parsed = xmlParser.parse(xml);
 
-  while ((alertMatch = alertRegex.exec(xml)) !== null) {
-    const block = alertMatch[1];
+    // Handle both <feed><alert>... and top-level <alert>...
+    const root = parsed.feed ?? parsed.alert ?? parsed;
+    const alertNodes: unknown[] = Array.isArray(root.alert) ? root.alert
+      : Array.isArray(root) ? root
+      : root.alert ? [root.alert]
+      : [];
 
-    const getText = (tag: string, source: string = block): string => {
-      const m = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`).exec(source);
-      return m ? m[1].trim() : '';
-    };
+    for (const node of alertNodes as Record<string, unknown>[]) {
+      const id = String(node.identifier ?? '');
+      if (!id) continue;
 
-    const id = getText('identifier');
-    if (!id) continue;
+      const infoNodes: Record<string, unknown>[] = Array.isArray(node.info) ? node.info
+        : node.info ? [node.info as Record<string, unknown>] : [];
 
-    // Parse info blocks
-    const infoRegex = /<info>([\s\S]*?)<\/info>/gi;
-    let infoMatch;
-    const areas: CapAlert['areas'] = [];
-    let headline = '';
-    let description = '';
-    let severity = '';
-    let urgency = '';
-    let certainty = '';
-    let expires = '';
+      const areas: CapAlert['areas'] = [];
+      let headline = '';
+      let description = '';
+      let severity = '';
+      let urgency = '';
+      let certainty = '';
+      let expires = '';
 
-    while ((infoMatch = infoRegex.exec(block)) !== null) {
-      const info = infoMatch[1];
-      headline = headline || getText('headline', info);
-      description = description || getText('description', info);
-      severity = severity || getText('severity', info);
-      urgency = urgency || getText('urgency', info);
-      certainty = certainty || getText('certainty', info);
-      expires = expires || getText('expires', info);
+      for (const info of infoNodes) {
+        headline = headline || String(info.headline ?? '');
+        description = description || String(info.description ?? '');
+        severity = severity || String(info.severity ?? '');
+        urgency = urgency || String(info.urgency ?? '');
+        certainty = certainty || String(info.certainty ?? '');
+        expires = expires || String(info.expires ?? '');
 
-      // Parse area blocks
-      const areaRegex = /<area>([\s\S]*?)<\/area>/gi;
-      let areaMatch;
-      while ((areaMatch = areaRegex.exec(info)) !== null) {
-        const area = areaMatch[1];
-        const areaDesc = getText('areaDesc', area);
-        const polygonStr = getText('polygon', area);
-        const circleStr = getText('circle', area);
+        const areaNodes: Record<string, unknown>[] = Array.isArray(info.area) ? info.area
+          : info.area ? [info.area as Record<string, unknown>] : [];
 
-        let polygon: [number, number][] | null = null;
-        if (polygonStr) {
-          polygon = polygonStr.split(/\s+/).map(pair => {
-            const [lat, lon] = pair.split(',').map(Number);
-            return [lat, lon] as [number, number];
-          }).filter(([lat, lon]) => !isNaN(lat) && !isNaN(lon));
+        for (const area of areaNodes) {
+          const areaDesc = String(area.areaDesc ?? '');
+          const polygonStr = String(area.polygon ?? '');
+          const circleStr = String(area.circle ?? '');
+
+          let polygon: [number, number][] | null = null;
+          if (polygonStr) {
+            polygon = polygonStr.split(/\s+/).map(pair => {
+              const [lat, lon] = pair.split(',').map(Number);
+              return [lat, lon] as [number, number];
+            }).filter(([lat, lon]) => !isNaN(lat) && !isNaN(lon));
+            if (polygon.length === 0) polygon = null;
+          }
+
+          areas.push({ areaDesc, polygon, circle: circleStr || null });
         }
-
-        areas.push({ areaDesc, polygon, circle: circleStr || null });
       }
-    }
 
-    alerts.push({
-      id,
-      sender: getText('sender'),
-      sent: getText('sent'),
-      status: getText('status'),
-      msgType: getText('msgType'),
-      headline,
-      description,
-      severity,
-      urgency,
-      certainty,
-      expires,
-      areas,
-    });
+      alerts.push({
+        id,
+        sender: String(node.sender ?? ''),
+        sent: String(node.sent ?? ''),
+        status: String(node.status ?? ''),
+        msgType: String(node.msgType ?? ''),
+        headline,
+        description,
+        severity,
+        urgency,
+        certainty,
+        expires,
+        areas,
+      });
+    }
+  } catch (err) {
+    console.warn('[cap] XML parse error:', (err as Error).message);
   }
 
   return alerts;

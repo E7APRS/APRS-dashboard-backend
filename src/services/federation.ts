@@ -13,6 +13,7 @@ import { recordPosition } from './source-health';
 // Positions we've seen (avoid re-broadcasting federated positions)
 const seenIds = new Set<string>();
 const SEEN_TTL = 60_000;
+const MAX_SEEN = 10_000;
 
 function posKey(pos: Position): string {
   return `${pos.radioId}:${pos.timestamp}`;
@@ -26,14 +27,21 @@ export function federatePosition(pos: Position): void {
 
   const key = posKey(pos);
   if (seenIds.has(key)) return; // already federated
+  if (seenIds.size >= MAX_SEEN) {
+    // Evict oldest entry (first inserted) to prevent unbounded growth
+    const oldest = seenIds.values().next().value;
+    if (oldest) seenIds.delete(oldest);
+  }
   seenIds.add(key);
   setTimeout(() => seenIds.delete(key), SEEN_TTL);
 
   for (const peerUrl of config.federationPeers) {
     const url = `${peerUrl}/api/federation/receive`;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (config.gpsApiKey) headers['x-api-key'] = config.gpsApiKey;
     fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(pos),
       signal: AbortSignal.timeout(5000),
     }).catch(() => {
@@ -49,6 +57,10 @@ export function federatePosition(pos: Position): void {
 export async function receiveFederatedPosition(pos: Position): Promise<boolean> {
   const key = posKey(pos);
   if (seenIds.has(key)) return false; // already seen
+  if (seenIds.size >= MAX_SEEN) {
+    const oldest = seenIds.values().next().value;
+    if (oldest) seenIds.delete(oldest);
+  }
   seenIds.add(key);
   setTimeout(() => seenIds.delete(key), SEEN_TTL);
 

@@ -2,6 +2,7 @@ import 'dotenv/config';
 import http from 'http';
 import path from 'path';
 import express from 'express';
+import helmet from 'helmet';
 import cors from 'cors';
 import { config } from './config';
 import { DataSource, Position } from './types';
@@ -10,24 +11,47 @@ import authRouter from './api/auth-router';
 import { requireAuth } from './middleware/requireAuth';
 import { initSocket, broadcast } from './socket/index';
 import { getAllDevices, warmCache } from './services/store';
-import { initDatabase } from './services/database';
-import { setPositionHandler, startSource, getRunning } from './services/source-manager';
-import { startJournalReplay } from './services/supabase-journal';
+import { initDatabase, closeDatabase } from './services/database';
+import { setPositionHandler, startSource, getRunning, stopAllSources } from './services/source-manager';
+import { startJournalReplay, stopJournalReplay } from './services/supabase-journal';
 import {
   startHealthMonitor,
+  stopHealthMonitor,
   setHealthChangeCallback,
   getAllHealth,
 } from './services/source-health';
-import { startSync } from './services/sync';
+import { startSync, stopSync } from './services/sync';
 import { startCapPoller } from './services/cap';
 import { startTakBridge } from './services/tak-bridge';
 import { ingestPosition } from './services/ingest';
 
 const app = express();
+// Trust Fly.io's reverse proxy for X-Forwarded-* headers
+app.set('trust proxy', true);
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  // HSTS: tell browsers to always use HTTPS (1 year, include subdomains)
+  strictTransportSecurity: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+  },
+}));
 app.use(cors({ origin: config.corsOrigins }));
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '1mb' }));
 // Serve avatar images from same base dir as SQLite (persistent volume in production)
-app.use('/avatars', express.static(path.join(path.dirname(config.sqlite.path), 'avatars')));
+app.use('/avatars', express.static(path.join(path.dirname(config.sqlite.path), 'avatars'), {
+  setHeaders: (res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+  },
+}));
 // POST /api/gps, /api/relay, /api/federation/receive use API key auth; all other /api routes require JWT
 app.use('/api', (req, res, next) => {
   if (req.method === 'POST' && (req.path === '/gps' || req.path === '/relay' || req.path === '/federation/receive')) return next();
@@ -232,6 +256,10 @@ app.get('/', (_req, res) => {
 const server = http.createServer(app);
 initSocket(server);
 
+// Cleanup functions captured from services that return stop callbacks
+let stopCapPollerFn: (() => void) = () => {};
+let stopTakBridgeFn: (() => void) = () => {};
+
 async function handlePosition(pos: Position): Promise<void> {
   await ingestPosition(pos);
 }
@@ -256,12 +284,16 @@ async function boot(): Promise<void> {
   }
 
   // Start CAP alert poller (independent of data sources)
-  startCapPoller();
+  stopCapPollerFn = startCapPoller();
 
   // Start TAK Server bridge if configured
-  startTakBridge();
+  stopTakBridgeFn = startTakBridge();
 
   console.log('[boot] Active sources:', getRunning().join(', ') || 'none');
+
+  if (!config.gpsApiKey) {
+    console.warn('[boot] WARNING: GPS_API_KEY not set — POST /api/gps, /api/relay, /api/federation/receive are unauthenticated');
+  }
 
   if (config.dataSources.length === 0) {
     console.log('[boot] No sources enabled — manual POST /api/gps only');
@@ -276,3 +308,41 @@ boot().catch(err => {
   console.error('[boot] Fatal error:', err);
   process.exit(1);
 });
+
+// ─── Graceful Shutdown ────────────────────────────────────────────────────────
+
+let shuttingDown = false;
+
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — shutting down gracefully...`);
+
+  // Force exit after 5s if something hangs
+  const forceTimer = setTimeout(() => {
+    console.error('[shutdown] Forced exit after timeout');
+    process.exit(1);
+  }, 5000);
+  forceTimer.unref();
+
+  // Stop background timers first
+  stopHealthMonitor();
+  stopJournalReplay();
+  stopSync();
+  stopCapPollerFn();
+  stopTakBridgeFn();
+
+  // Stop all data sources (APRS-IS TCP, MQTT connections, pollers, etc.)
+  stopAllSources();
+
+  // Stop accepting new connections, then close DB
+  server.close(() => {
+    console.log('[shutdown] HTTP server closed');
+    closeDatabase();
+    console.log('[shutdown] Database closed — exiting');
+    process.exit(0);
+  });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

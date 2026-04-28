@@ -3,22 +3,36 @@ import { Server as SocketServer } from 'socket.io';
 import { Position } from '../types';
 import { config } from '../config';
 import { getLatestPositions, getAllDevices, getHistory } from '../services/store';
-import { getSupabase } from '../services/supabase';
+import { getSupabase, isSupabaseConfigured } from '../services/supabase';
 import { getAllHealth } from '../services/source-health';
 import { getActiveCapAlerts } from '../services/cap';
 import { getGeofencesByUser } from '../services/geofence';
 
 let io: SocketServer | null = null;
 const userSockets = new Map<string, Set<string>>();
+const MAX_CONNECTIONS_PER_USER = 5;
+const MAX_TOTAL_CONNECTIONS = 500;
 
 export function initSocket(server: HttpServer): SocketServer {
   io = new SocketServer(server, {
     cors: { origin: config.corsOrigins },
+    maxHttpBufferSize: 1e6,     // 1 MB max message size
+    connectTimeout: 10_000,     // 10s connection timeout
+    pingTimeout: 20_000,
+    pingInterval: 25_000,
   });
 
   io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     if (!token) { next(new Error('Unauthorized')); return; }
+
+    if (!isSupabaseConfigured()) {
+      // Development fallback: accept connections without Supabase auth
+      socket.data.userId = 'dev-user';
+      next();
+      return;
+    }
+
     const { data: { user }, error } = await getSupabase().auth.getUser(token);
     if (error || !user) { next(new Error('Unauthorized')); return; }
     socket.data.userId = user.id;
@@ -40,6 +54,23 @@ export function initSocket(server: HttpServer): SocketServer {
 
   io.on('connection', socket => {
     const userId = socket.data.userId as string;
+
+    // Enforce total connection cap
+    const totalConnections = io!.engine.clientsCount ?? 0;
+    if (totalConnections > MAX_TOTAL_CONNECTIONS) {
+      console.warn('[socket] Max total connections reached, rejecting:', socket.id);
+      socket.disconnect(true);
+      return;
+    }
+
+    // Enforce per-user connection cap
+    const existing = userSockets.get(userId);
+    if (existing && existing.size >= MAX_CONNECTIONS_PER_USER) {
+      console.warn(`[socket] User ${userId} exceeded max connections (${MAX_CONNECTIONS_PER_USER}), rejecting:`, socket.id);
+      socket.disconnect(true);
+      return;
+    }
+
     console.log('[socket] Client connected:', socket.id);
 
     // Register in user→socket map
@@ -52,7 +83,12 @@ export function initSocket(server: HttpServer): SocketServer {
     socket.emit('geofences:snapshot', getGeofencesByUser(userId));
 
     // Allow clients to re-request snapshots (e.g. after navigating back to the map)
+    // Rate-limit to 1 request per 5 seconds per connection
+    let lastSnapshotRequest = 0;
     socket.on('snapshots:request', () => {
+      const now = Date.now();
+      if (now - lastSnapshotRequest < 5_000) return;
+      lastSnapshotRequest = now;
       sendSnapshots(socket);
       socket.emit('geofences:snapshot', getGeofencesByUser(userId));
     });

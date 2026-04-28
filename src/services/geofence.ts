@@ -40,11 +40,17 @@ interface GeofenceRow {
 const deviceFenceState = new Map<string, Set<string>>();
 
 function rowToGeofence(row: GeofenceRow): Geofence {
+  let geometry: GeoJSON.Polygon;
+  try {
+    geometry = JSON.parse(row.geometry);
+  } catch {
+    geometry = { type: 'Polygon', coordinates: [] };
+  }
   return {
     id: row.id,
     name: row.name,
     description: row.description,
-    geometry: JSON.parse(row.geometry),
+    geometry,
     color: row.color,
     active: row.active === 1,
     createdBy: row.created_by,
