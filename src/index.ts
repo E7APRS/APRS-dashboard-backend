@@ -44,12 +44,33 @@ app.use(helmet({
     includeSubDomains: true,
   },
 }));
-app.use(cors({ origin: config.corsOrigins }));
+// CORS configuration: allow specific origins or wildcard
+const corsOptions = {
+  origin: config.corsOrigins.length > 0 ? config.corsOrigins : '*',
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 // Serve avatar images from same base dir as SQLite (persistent volume in production)
-app.use('/avatars', express.static(path.join(path.dirname(config.sqlite.path), 'avatars'), {
+// Apply CORS headers to static files
+app.use('/avatars', (req, res, next) => {
+  // Set CORS headers for image responses
+  if (!config.corsOrigins.length) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    const origin = req.get('origin');
+    if (origin && config.corsOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+  }
+  res.setHeader('Cross-Origin-Resource-Sharing', 'true');
+  next();
+}, express.static(path.join(path.dirname(config.sqlite.path), 'avatars'), {
   setHeaders: (res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Long cache for assets
   },
 }));
 // POST /api/gps, /api/relay, /api/federation/receive use API key auth; all other /api routes require JWT
