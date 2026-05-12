@@ -10,7 +10,11 @@ export const config = {
   port: parseInt(process.env.PORT ?? '7531', 10),
 
   // Comma-separated allowed origins for CORS.
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:7530').split(',').map(s => s.trim()).filter(s => s !== '*'),
+  // Supports: http://localhost:7530,https://example.com,*
+  // If empty or not set, defaults to localhost:7530 in development
+  corsOrigins: process.env.CORS_ORIGINS 
+    ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+    : ['http://localhost:7530'],
 
   // Shared secret required on POST /api/gps (X-Api-Key header)
   gpsApiKey: process.env.GPS_API_KEY ?? '',
